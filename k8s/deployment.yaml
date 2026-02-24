@@ -1,0 +1,118 @@
+++ k8s/deployment.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agentsdk-secrets
+  labels:
+    app.kubernetes.io/name: agentsdk-go
+type: Opaque
+stringData:
+  API_KEY: "replace-me"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agentsdk-sessions
+  labels:
+    app.kubernetes.io/name: agentsdk-go
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentsdk-go
+  labels:
+    app.kubernetes.io/name: agentsdk-go
+    app.kubernetes.io/component: control-plane
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentsdk-go
+      app.kubernetes.io/component: control-plane
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentsdk-go
+        app.kubernetes.io/component: control-plane
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: agentctl
+          image: ghcr.io/cexll/agentsdk-go:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agentsdk-secrets
+                  key: API_KEY
+            - name: BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: agentsdk-config
+                  key: BASE_URL
+            - name: DEFAULT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: agentsdk-config
+                  key: DEFAULT_MODEL
+            - name: MCP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: agentsdk-config
+                  key: MCP_SERVERS
+            - name: PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: agentsdk-config
+                  key: PORT
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: sessions
+              mountPath: /var/agentsdk/sessions
+      volumes:
+        - name: sessions
+          persistentVolumeClaim:
+            claimName: agentsdk-sessions

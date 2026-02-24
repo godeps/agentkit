@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentsdk-go
+  labels:
+    app.kubernetes.io/name: agentsdk-go
+    app.kubernetes.io/component: control-plane
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agentsdk-go
+    app.kubernetes.io/component: control-plane
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8080
+      targetPort: http
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: agentsdk-monitor
+  labels:
+    app.kubernetes.io/name: agentsdk-go
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentsdk-go
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: agentsdk-alerts
+  labels:
+    app.kubernetes.io/name: agentsdk-go
+spec:
+  groups:
+    - name: agentsdk-go.rules
+      rules:
+        - alert: AgentsdkHighErrorRate
+          expr: |
+            (sum(rate(http_requests_total{job="agentsdk-go",code=~"5.."}[5m])) /
+             sum(rate(http_requests_total{job="agentsdk-go"}[5m]))) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High 5xx rate on agentsdk-go"
+            description: "5xx error rate exceeded 5% over the last 5 minutes."
+        - alert: AgentsdkHighLatencyP95
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job="agentsdk-go"}[5m]))) > 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High latency (p95) on agentsdk-go"
+            description: "p95 HTTP latency is above 1s for 5 minutes."

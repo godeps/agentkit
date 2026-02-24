@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  agentsdk:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agentsdk-http:latest
+    container_name: agentsdk-http
+    ports:
+      - "8080:8080"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - AGENTSDK_HTTP_ADDR=${AGENTSDK_HTTP_ADDR:-0.0.0.0:8080}
+      - AGENTSDK_MODEL=${AGENTSDK_MODEL:-claude-3-5-sonnet-20241022}
+    volumes:
+      - agentsdk_sessions:/var/agentsdk/sessions
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  agentsdk_sessions:
+    driver: local

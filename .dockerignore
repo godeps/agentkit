@@ -1,0 +1,14 @@
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+docs/
+examples/cli
+examples/mcp
+examples/middleware
+tests/
+*.md
+*.log
+tmp/
+vendor/
+node_modules/
