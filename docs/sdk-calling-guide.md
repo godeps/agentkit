@@ -80,6 +80,14 @@ opts := api.Options{
 
 如果设置了 `ConfigRoot`，上述目录都在该根目录下解析。
 
+配置优先级（高到低）：
+
+1. API 显式参数（`api.Options` / `api.Request`）
+2. 环境变量
+3. `settings.local.json`
+4. `settings.json`
+5. SDK 默认值
+
 ## 3. skills 多目录与冲突策略
 
 ### 3.1 自动发现规则
@@ -197,4 +205,3 @@ agentctl \
 ```go
 func boolPtr(v bool) *bool { return &v }
 ```
-

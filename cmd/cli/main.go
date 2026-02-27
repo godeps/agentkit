@@ -10,7 +10,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/godeps/agentkit/pkg/api"
 	modelpkg "github.com/godeps/agentkit/pkg/model"
@@ -34,9 +36,13 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	modelName := flags.String("model", "claude-3-5-sonnet-20241022", "Anthropic model name")
 	systemPrompt := flags.String("system-prompt", "", "System prompt override")
 	sessionID := flags.String("session", "", "Session identifier override")
+	timeoutMs := flags.Int("timeout-ms", 10*60*1000, "Run timeout in milliseconds")
+	printConfig := flags.Bool("print-effective-config", false, "Print resolved runtime config before running")
 	promptFile := flags.String("prompt-file", "", "Read prompt from file (defaults to stdin/args)")
 	promptLiteral := flags.String("prompt", "", "Prompt literal (overrides stdin)")
 	stream := flags.Bool("stream", false, "Stream events instead of waiting for completion")
+	verbose := flags.Bool("verbose", false, "Verbose stream diagnostics")
+	skillsRecursive := flags.Bool("skills-recursive", true, "Discover SKILL.md recursively")
 
 	var mcpServers multiValue
 	flags.Var(&mcpServers, "mcp", "Register an MCP server (repeatable)")
@@ -48,6 +54,11 @@ func run(argv []string, stdout, stderr io.Writer) error {
 
 	if err := flags.Parse(argv); err != nil {
 		return err
+	}
+	if v := strings.TrimSpace(os.Getenv("AGENTSDK_TIMEOUT_MS")); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			*timeoutMs = parsed
+		}
 	}
 	prompt, err := resolvePrompt(*promptLiteral, *promptFile, flags.Args())
 	if err != nil {
@@ -77,12 +88,28 @@ func run(argv []string, stdout, stderr io.Writer) error {
 		ModelFactory: provider,
 		MCPServers:   mcpServers,
 		SkillsDirs:   append([]string(nil), skillsDirs...),
+		SkillsRecursive: func() *bool {
+			v := *skillsRecursive
+			return &v
+		}(),
+	}
+	if *printConfig {
+		printEffectiveConfig(stderr, options, *timeoutMs)
 	}
 	runtime, err := api.New(context.Background(), options)
 	if err != nil {
 		return fmt.Errorf("create runtime: %w", err)
 	}
 	defer runtime.Close()
+
+	ctx := context.Background()
+	cancel := func() {}
+	if *timeoutMs > 0 {
+		ctxWithTimeout, c := context.WithTimeout(ctx, time.Duration(*timeoutMs)*time.Millisecond)
+		ctx = ctxWithTimeout
+		cancel = c
+	}
+	defer cancel()
 
 	req := api.Request{
 		Prompt:    prompt,
@@ -98,9 +125,9 @@ func run(argv []string, stdout, stderr io.Writer) error {
 		Tags: parseTags(tagFlags),
 	}
 	if *stream {
-		return streamRun(runtime, req, stdout)
+		return streamRun(ctx, runtime, req, stdout, stderr, *verbose)
 	}
-	resp, err := runtime.Run(context.Background(), req)
+	resp, err := runtime.Run(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -141,13 +168,19 @@ func resolvePrompt(literal, file string, tail []string) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-func streamRun(rt *api.Runtime, req api.Request, out io.Writer) error {
-	ch, err := rt.RunStream(context.Background(), req)
+func streamRun(ctx context.Context, rt *api.Runtime, req api.Request, out, errOut io.Writer, verbose bool) error {
+	ch, err := rt.RunStream(ctx, req)
 	if err != nil {
 		return err
 	}
 	encoder := json.NewEncoder(out)
 	for evt := range ch {
+		if verbose && errOut != nil {
+			switch evt.Type {
+			case api.EventToolExecutionResult, api.EventMessageStop, api.EventError:
+				_, _ = fmt.Fprintf(errOut, "[event] %s\n", evt.Type)
+			}
+		}
 		if err := encoder.Encode(evt); err != nil {
 			return err
 		}
@@ -195,4 +228,23 @@ func parseTags(values multiValue) map[string]string {
 		tags[key] = val
 	}
 	return tags
+}
+
+func printEffectiveConfig(out io.Writer, opts api.Options, timeoutMs int) {
+	if out == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(out, "effective-config\n")
+	_, _ = fmt.Fprintf(out, "  project_root: %s\n", opts.ProjectRoot)
+	_, _ = fmt.Fprintf(out, "  config_root: %s\n", opts.ConfigRoot)
+	_, _ = fmt.Fprintf(out, "  timeout_ms: %d\n", timeoutMs)
+	_, _ = fmt.Fprintf(out, "  skills_recursive: %v\n", opts.SkillsRecursive != nil && *opts.SkillsRecursive)
+	if len(opts.SkillsDirs) == 0 {
+		_, _ = fmt.Fprintf(out, "  skills_dirs: (default)\n")
+		return
+	}
+	_, _ = fmt.Fprintf(out, "  skills_dirs:\n")
+	for _, d := range opts.SkillsDirs {
+		_, _ = fmt.Fprintf(out, "    - %s\n", d)
+	}
 }
