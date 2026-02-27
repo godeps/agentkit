@@ -685,11 +685,13 @@ customMiddleware := middleware.Funcs{
 - [Architecture](docs/architecture.md) - Detailed architecture analysis
 - [Getting Started](docs/getting-started.md) - Step-by-step tutorial
 - [API Reference](docs/api-reference.md) - API documentation
+- [SDK Calling Guide](docs/sdk-calling-guide.md) - End-to-end SDK integration and invocation patterns
 - [Security](docs/security.md) - Security configuration guide
 - [Custom Tools Guide](docs/custom-tools-guide.md) - Custom tool registration and usage
 - [Trace System](docs/trace-system.md) - OpenTelemetry and HTTP trace setup
 - [Smart Defaults](docs/smart-defaults.md) - Auto-configuration by EntryPoint
 - [HTTP API Guide](examples/03-http/README.md) - HTTP server instructions
+- [HTTP External Calling Guide](docs/http-external-calling-guide.md) - Java/Python integration examples via HTTP
 
 ## Tech Stack
 

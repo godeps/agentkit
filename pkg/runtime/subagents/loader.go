@@ -17,6 +17,7 @@ import (
 // LoaderOptions controls how subagents are discovered from the filesystem.
 type LoaderOptions struct {
 	ProjectRoot string
+	ConfigRoot  string
 	// Deprecated: user-level scanning has been removed; this field is ignored.
 	UserHome string
 	// Deprecated: user-level scanning has been removed; this flag is ignored.
@@ -75,6 +76,9 @@ func LoadFromFS(opts LoaderOptions) ([]SubagentRegistration, []error) {
 	}
 
 	projectDir := filepath.Join(opts.ProjectRoot, ".claude", "agents")
+	if base := resolveConfigRoot(opts.ProjectRoot, opts.ConfigRoot); base != "" {
+		projectDir = filepath.Join(base, "agents")
+	}
 	files, loadErrs := loadSubagentDir(projectDir, fsLayer)
 	errs = append(errs, loadErrs...)
 	for name, file := range files {
@@ -117,6 +121,24 @@ func LoadFromFS(opts LoaderOptions) ([]SubagentRegistration, []error) {
 	}
 
 	return registrations, errs
+}
+
+func resolveConfigRoot(projectRoot, configRoot string) string {
+	projectRoot = strings.TrimSpace(projectRoot)
+	configRoot = strings.TrimSpace(configRoot)
+	if configRoot == "" {
+		if projectRoot == "" {
+			return ""
+		}
+		return filepath.Join(projectRoot, ".claude")
+	}
+	if filepath.IsAbs(configRoot) {
+		return filepath.Clean(configRoot)
+	}
+	if projectRoot == "" {
+		return filepath.Clean(configRoot)
+	}
+	return filepath.Join(projectRoot, configRoot)
 }
 
 func loadSubagentDir(root string, fsLayer *config.FS) (map[string]SubagentFile, []error) {

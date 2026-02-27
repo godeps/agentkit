@@ -30,6 +30,7 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	entry := flags.String("entry", "cli", "Entry point type (cli/ci/platform)")
 	project := flags.String("project", ".", "Project root")
 	claudeDir := flags.String("claude", "", "Optional path to .claude directory")
+	configRoot := flags.String("config-root", "", "Optional config root directory (defaults to <project>/.claude)")
 	modelName := flags.String("model", "claude-3-5-sonnet-20241022", "Anthropic model name")
 	systemPrompt := flags.String("system-prompt", "", "System prompt override")
 	sessionID := flags.String("session", "", "Session identifier override")
@@ -39,6 +40,8 @@ func run(argv []string, stdout, stderr io.Writer) error {
 
 	var mcpServers multiValue
 	flags.Var(&mcpServers, "mcp", "Register an MCP server (repeatable)")
+	var skillsDirs multiValue
+	flags.Var(&skillsDirs, "skills-dir", "Additional skills directory (repeatable)")
 
 	var tagFlags multiValue
 	flags.Var(&tagFlags, "tag", "Attach tag key=value pairs (repeatable)")
@@ -62,12 +65,18 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	if strings.TrimSpace(*claudeDir) != "" {
 		settingsPath = filepath.Join(*claudeDir, "settings.json")
 	}
+	finalConfigRoot := strings.TrimSpace(*configRoot)
+	if finalConfigRoot == "" && strings.TrimSpace(*claudeDir) != "" {
+		finalConfigRoot = *claudeDir
+	}
 	options := api.Options{
 		EntryPoint:   api.EntryPoint(strings.ToLower(strings.TrimSpace(*entry))),
 		ProjectRoot:  *project,
+		ConfigRoot:   finalConfigRoot,
 		SettingsPath: settingsPath,
 		ModelFactory: provider,
 		MCPServers:   mcpServers,
+		SkillsDirs:   append([]string(nil), skillsDirs...),
 	}
 	runtime, err := api.New(context.Background(), options)
 	if err != nil {

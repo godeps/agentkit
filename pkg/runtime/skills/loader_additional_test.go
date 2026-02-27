@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -129,7 +130,7 @@ func TestLoadSkillDirNotDirectory(t *testing.T) {
 		t.Fatalf("prep: %v", err)
 	}
 
-	_, errs := loadSkillDir(file, nil)
+	_, errs := loadSkillDir(file, true, nil)
 	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "not a directory") {
 		t.Fatalf("expected not a directory error, got %v", errs)
 	}
@@ -137,7 +138,7 @@ func TestLoadSkillDirNotDirectory(t *testing.T) {
 
 func TestLoadSkillDirMissing(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "not-there")
-	if result, errs := loadSkillDir(missing, nil); result != nil || len(errs) != 0 {
+	if result, errs := loadSkillDir(missing, true, nil); result != nil || len(errs) != 0 {
 		t.Fatalf("expected nil results and no errors, got %v %v", result, errs)
 	}
 }
@@ -204,6 +205,66 @@ func TestSetSkillFileOpsForTest(t *testing.T) {
 	}
 	if out2["body"] != "updated body" {
 		t.Fatalf("expected updated body, got: %v", out2["body"])
+	}
+}
+
+func TestLoadFromFSMultipleDirectoriesRecursive(t *testing.T) {
+	root := t.TempDir()
+	dirA := filepath.Join(root, "ext-a")
+	dirB := filepath.Join(root, "ext-b")
+	writeSkill(t, filepath.Join(dirA, "nested", "alpha", "SKILL.md"), "alpha", "a")
+	writeSkill(t, filepath.Join(dirB, "beta", "SKILL.md"), "beta", "b")
+
+	regs, errs := LoadFromFS(LoaderOptions{
+		ProjectRoot: root,
+		Directories: []string{dirA, dirB},
+	})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errs: %v", errs)
+	}
+	if len(regs) != 2 {
+		t.Fatalf("expected 2 skills, got %d", len(regs))
+	}
+	var names []string
+	for _, reg := range regs {
+		names = append(names, reg.Definition.Name)
+	}
+	sort.Strings(names)
+	if strings.Join(names, ",") != "alpha,beta" {
+		t.Fatalf("unexpected names: %v", names)
+	}
+}
+
+func TestLoadFromFSRecursiveToggle(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "skills")
+	writeSkill(t, filepath.Join(dir, "nested", "gamma", "SKILL.md"), "gamma", "g")
+	recursive := false
+	regs, errs := LoadFromFS(LoaderOptions{
+		ProjectRoot: root,
+		Directories: []string{dir},
+		Recursive:   &recursive,
+	})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errs: %v", errs)
+	}
+	if len(regs) != 0 {
+		t.Fatalf("expected no skills for non-recursive load, got %d", len(regs))
+	}
+}
+
+func TestLoadFromFSWithConfigRoot(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, filepath.Join(root, "config", "skills", "delta", "SKILL.md"), "delta", "d")
+	regs, errs := LoadFromFS(LoaderOptions{
+		ProjectRoot: root,
+		ConfigRoot:  "config",
+	})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errs: %v", errs)
+	}
+	if len(regs) != 1 || regs[0].Definition.Name != "delta" {
+		t.Fatalf("unexpected regs: %+v", regs)
 	}
 }
 

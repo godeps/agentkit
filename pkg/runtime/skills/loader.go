@@ -57,10 +57,17 @@ func statFileOverrideOrOS(path string) (fs.FileInfo, error) {
 // LoaderOptions controls how skills are discovered from the filesystem.
 type LoaderOptions struct {
 	ProjectRoot string
+	ConfigRoot  string
 	// Deprecated: user-level scanning has been removed; this field is ignored.
 	UserHome string
 	// Deprecated: user-level scanning has been removed; this flag is ignored.
 	EnableUser bool
+	// Directories overrides the discovery roots for SKILL.md files.
+	// When empty, defaults to "<ConfigRoot>/skills".
+	Directories []string
+	// Recursive controls whether skills are discovered recursively from each
+	// root directory. Nil defaults to true.
+	Recursive *bool
 	// FS is the filesystem abstraction layer for loading skills.
 	// If nil, falls back to os.* functions for backward compatibility.
 	FS *config.FS
@@ -167,11 +174,16 @@ func LoadFromFS(opts LoaderOptions) ([]SkillRegistration, []error) {
 	}
 
 	ops := resolveFileOps(opts.FS)
-
-	projectDir := filepath.Join(opts.ProjectRoot, ".claude", "skills")
-	files, loadErrs := loadSkillDir(projectDir, fsLayer)
-	errs = append(errs, loadErrs...)
-	allFiles = append(allFiles, files...)
+	roots := resolveSkillRoots(opts)
+	recursive := true
+	if opts.Recursive != nil {
+		recursive = *opts.Recursive
+	}
+	for _, root := range roots {
+		files, loadErrs := loadSkillDir(root, recursive, fsLayer)
+		errs = append(errs, loadErrs...)
+		allFiles = append(allFiles, files...)
+	}
 
 	if len(allFiles) == 0 {
 		return nil, errs
@@ -207,7 +219,7 @@ func LoadFromFS(opts LoaderOptions) ([]SkillRegistration, []error) {
 	return registrations, errs
 }
 
-func loadSkillDir(root string, fsLayer *config.FS) ([]SkillFile, []error) {
+func loadSkillDir(root string, recursive bool, fsLayer *config.FS) ([]SkillFile, []error) {
 	var (
 		results []SkillFile
 		errs    []error
@@ -228,30 +240,110 @@ func loadSkillDir(root string, fsLayer *config.FS) ([]SkillFile, []error) {
 		return nil, []error{fmt.Errorf("skills: path %s is not a directory", root)}
 	}
 
-	entries, err := fsLayer.ReadDir(root)
-	if err != nil {
-		return nil, []error{fmt.Errorf("skills: read dir %s: %w", root, err)}
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
+	if !recursive {
+		entries, err := fsLayer.ReadDir(root)
+		if err != nil {
+			return nil, []error{fmt.Errorf("skills: read dir %s: %w", root, err)}
 		}
 
-		dirName := entry.Name()
-		path := filepath.Join(root, dirName, "SKILL.md")
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+
+			dirName := entry.Name()
+			path := filepath.Join(root, dirName, "SKILL.md")
+			file, parseErr := parseSkillFile(path, dirName, fsLayer)
+			if parseErr != nil {
+				if errors.Is(parseErr, fs.ErrNotExist) {
+					continue
+				}
+				errs = append(errs, parseErr)
+				continue
+			}
+
+			results = append(results, file)
+		}
+		return results, errs
+	}
+
+	walkErr := fsLayer.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			errs = append(errs, fmt.Errorf("skills: walk %s: %w", path, walkErr))
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.EqualFold(d.Name(), "SKILL.md") {
+			return nil
+		}
+		dirName := filepath.Base(filepath.Dir(path))
 		file, parseErr := parseSkillFile(path, dirName, fsLayer)
 		if parseErr != nil {
 			if errors.Is(parseErr, fs.ErrNotExist) {
-				continue
+				return nil
 			}
 			errs = append(errs, parseErr)
-			continue
+			return nil
 		}
-
 		results = append(results, file)
+		return nil
+	})
+	if walkErr != nil {
+		errs = append(errs, walkErr)
 	}
 	return results, errs
+}
+
+func resolveSkillRoots(opts LoaderOptions) []string {
+	roots := make([]string, 0, len(opts.Directories)+1)
+	seen := map[string]struct{}{}
+	add := func(dir string) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			return
+		}
+		if !filepath.IsAbs(dir) {
+			if strings.TrimSpace(opts.ProjectRoot) != "" {
+				dir = filepath.Join(opts.ProjectRoot, dir)
+			}
+		}
+		dir = filepath.Clean(dir)
+		if _, ok := seen[dir]; ok {
+			return
+		}
+		seen[dir] = struct{}{}
+		roots = append(roots, dir)
+	}
+	for _, dir := range opts.Directories {
+		add(dir)
+	}
+	if len(roots) == 0 {
+		base := resolveConfigRoot(opts.ProjectRoot, opts.ConfigRoot)
+		if base != "" {
+			add(filepath.Join(base, "skills"))
+		}
+	}
+	return roots
+}
+
+func resolveConfigRoot(projectRoot, configRoot string) string {
+	projectRoot = strings.TrimSpace(projectRoot)
+	configRoot = strings.TrimSpace(configRoot)
+	if configRoot == "" {
+		if projectRoot == "" {
+			return ""
+		}
+		return filepath.Join(projectRoot, ".claude")
+	}
+	if filepath.IsAbs(configRoot) {
+		return filepath.Clean(configRoot)
+	}
+	if projectRoot == "" {
+		return filepath.Clean(configRoot)
+	}
+	return filepath.Join(projectRoot, configRoot)
 }
 
 func parseSkillFile(path, dirName string, fsLayer *config.FS) (SkillFile, error) {

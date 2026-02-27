@@ -15,7 +15,7 @@ import (
 
 func TestDiskHistoryPersisterSaveLoadAndCleanup(t *testing.T) {
 	root := t.TempDir()
-	p := newDiskHistoryPersister(root)
+	p := newDiskHistoryPersister(root, "")
 	if p == nil {
 		t.Fatalf("expected persister")
 	}
@@ -61,7 +61,7 @@ func TestDiskHistoryPersisterSaveLoadAndCleanup(t *testing.T) {
 
 func TestPersistHistoryWritesSnapshot(t *testing.T) {
 	root := t.TempDir()
-	p := newDiskHistoryPersister(root)
+	p := newDiskHistoryPersister(root, "")
 	if p == nil {
 		t.Fatalf("expected persister")
 	}
@@ -123,7 +123,7 @@ func TestDiskHistoryPersisterSaveAndCleanupErrors(t *testing.T) {
 
 func TestDiskHistoryPersisterSaveRenameFallback(t *testing.T) {
 	root := t.TempDir()
-	p := newDiskHistoryPersister(root)
+	p := newDiskHistoryPersister(root, "")
 	if p == nil {
 		t.Fatalf("expected persister")
 	}
@@ -147,7 +147,7 @@ func TestPersistHistorySkipsEmptyCases(t *testing.T) {
 	var rt *Runtime
 	rt.persistHistory("sess", message.NewHistory())
 
-	rt = &Runtime{historyPersister: newDiskHistoryPersister(t.TempDir())}
+	rt = &Runtime{historyPersister: newDiskHistoryPersister(t.TempDir(), "")}
 	rt.persistHistory(" ", message.NewHistory())
 	h := message.NewHistory()
 	rt.persistHistory("sess", h)
@@ -155,7 +155,7 @@ func TestPersistHistorySkipsEmptyCases(t *testing.T) {
 
 func TestDiskHistoryPersisterSaveMarshalError(t *testing.T) {
 	root := t.TempDir()
-	p := newDiskHistoryPersister(root)
+	p := newDiskHistoryPersister(root, "")
 	if p == nil {
 		t.Fatalf("expected persister")
 	}
@@ -177,7 +177,7 @@ func TestDiskHistoryPersisterSaveCreateTempError(t *testing.T) {
 		t.Skip("chmod permissions behave differently on windows")
 	}
 	root := t.TempDir()
-	p := newDiskHistoryPersister(root)
+	p := newDiskHistoryPersister(root, "")
 	if p == nil {
 		t.Fatalf("expected persister")
 	}
@@ -195,7 +195,7 @@ func TestDiskHistoryPersisterSaveCreateTempError(t *testing.T) {
 }
 
 func TestNewDiskHistoryPersisterEmptyRoot(t *testing.T) {
-	if p := newDiskHistoryPersister(" "); p != nil {
+	if p := newDiskHistoryPersister(" ", " "); p != nil {
 		t.Fatalf("expected nil persister for empty root")
 	}
 }

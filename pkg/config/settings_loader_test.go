@@ -14,8 +14,8 @@ func newIsolatedPaths(t *testing.T) (projectRoot, projectPath, localPath string)
 
 	projectRoot = filepath.Join(t.TempDir(), "project")
 	require.NoError(t, os.MkdirAll(projectRoot, 0o755))
-	projectPath = getProjectSettingsPath(projectRoot)
-	localPath = getLocalSettingsPath(projectRoot)
+	projectPath = getProjectSettingsPath(projectRoot, "")
+	localPath = getLocalSettingsPath(projectRoot, "")
 	return
 }
 

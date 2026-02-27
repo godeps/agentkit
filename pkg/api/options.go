@@ -152,6 +152,9 @@ type Options struct {
 	EntryPoint  EntryPoint
 	Mode        ModeContext
 	ProjectRoot string
+	// ConfigRoot is the directory containing declarative runtime files.
+	// Defaults to "<ProjectRoot>/.claude" when unset.
+	ConfigRoot string
 	// EmbedFS 可选的嵌入文件系统，用于支持将 .claude 目录打包到二进制
 	// 当设置时，文件加载优先级为：OS 文件系统 > 嵌入 FS
 	// 这允许运行时通过创建本地文件来覆盖嵌入的默认配置
@@ -216,6 +219,11 @@ type Options struct {
 	Skills    []SkillRegistration
 	Commands  []CommandRegistration
 	Subagents []SubagentRegistration
+	// SkillsDirs overrides skill discovery roots. Paths may be absolute, or
+	// relative to ProjectRoot. When empty, defaults to "<ConfigRoot>/skills".
+	SkillsDirs []string
+	// SkillsRecursive controls recursive SKILL.md discovery. Nil defaults to true.
+	SkillsRecursive *bool
 
 	Sandbox SandboxOptions
 
@@ -390,6 +398,12 @@ func (o Options) withDefaults() Options {
 		}
 	}
 	o.ProjectRoot = filepath.Clean(o.ProjectRoot)
+	if strings.TrimSpace(o.ConfigRoot) == "" {
+		o.ConfigRoot = filepath.Join(o.ProjectRoot, ".claude")
+	} else if !filepath.IsAbs(o.ConfigRoot) {
+		o.ConfigRoot = filepath.Join(o.ProjectRoot, o.ConfigRoot)
+	}
+	o.ConfigRoot = filepath.Clean(o.ConfigRoot)
 	if trimmed := strings.TrimSpace(o.SettingsPath); trimmed != "" {
 		if abs, err := filepath.Abs(trimmed); err == nil {
 			o.SettingsPath = abs
@@ -479,6 +493,13 @@ func (o Options) frozen() Options {
 			subCopy[i].Definition = def
 		}
 		o.Subagents = subCopy
+	}
+	if len(o.SkillsDirs) > 0 {
+		o.SkillsDirs = append([]string(nil), o.SkillsDirs...)
+	}
+	if o.SkillsRecursive != nil {
+		v := *o.SkillsRecursive
+		o.SkillsRecursive = &v
 	}
 
 	o.Sandbox = freezeSandboxOptions(o.Sandbox)

@@ -16,6 +16,8 @@ import (
 // Order (low -> high): defaults < project < local < runtime overrides.
 type SettingsLoader struct {
 	ProjectRoot      string
+	ConfigRoot       string
+	SettingsFiles    []string
 	RuntimeOverrides *Settings
 	FS               *FS
 }
@@ -38,9 +40,29 @@ func (l *SettingsLoader) Load() (*Settings, error) {
 	layers := []struct {
 		name string
 		path string
-	}{
-		{name: "project", path: getProjectSettingsPath(root)},
-		{name: "local", path: getLocalSettingsPath(root)},
+	}{}
+	if len(l.SettingsFiles) > 0 {
+		for idx, path := range l.SettingsFiles {
+			layers = append(layers, struct {
+				name string
+				path string
+			}{
+				name: fmt.Sprintf("settings[%d]", idx),
+				path: resolveSettingsPath(path, root),
+			})
+		}
+	} else {
+		configRoot := resolveConfigRoot(root, l.ConfigRoot)
+		layers = append(layers,
+			struct {
+				name string
+				path string
+			}{name: "project", path: getProjectSettingsPath(root, configRoot)},
+			struct {
+				name string
+				path string
+			}{name: "local", path: getLocalSettingsPath(root, configRoot)},
+		)
 	}
 
 	for _, layer := range layers {
@@ -62,19 +84,53 @@ func (l *SettingsLoader) Load() (*Settings, error) {
 }
 
 // getProjectSettingsPath returns the tracked project settings path.
-func getProjectSettingsPath(root string) string {
-	if strings.TrimSpace(root) == "" {
+func getProjectSettingsPath(root, configRoot string) string {
+	if strings.TrimSpace(root) == "" && strings.TrimSpace(configRoot) == "" {
 		return ""
 	}
-	return filepath.Join(root, ".claude", "settings.json")
+	base := resolveConfigRoot(root, configRoot)
+	return filepath.Join(base, "settings.json")
 }
 
 // getLocalSettingsPath returns the untracked project-local settings path.
-func getLocalSettingsPath(root string) string {
-	if strings.TrimSpace(root) == "" {
+func getLocalSettingsPath(root, configRoot string) string {
+	if strings.TrimSpace(root) == "" && strings.TrimSpace(configRoot) == "" {
 		return ""
 	}
-	return filepath.Join(root, ".claude", "settings.local.json")
+	base := resolveConfigRoot(root, configRoot)
+	return filepath.Join(base, "settings.local.json")
+}
+
+func resolveConfigRoot(projectRoot, configRoot string) string {
+	projectRoot = strings.TrimSpace(projectRoot)
+	configRoot = strings.TrimSpace(configRoot)
+	if configRoot == "" {
+		if projectRoot == "" {
+			return ""
+		}
+		return filepath.Join(projectRoot, ".claude")
+	}
+	if filepath.IsAbs(configRoot) {
+		return filepath.Clean(configRoot)
+	}
+	if projectRoot == "" {
+		return filepath.Clean(configRoot)
+	}
+	return filepath.Join(projectRoot, configRoot)
+}
+
+func resolveSettingsPath(path, projectRoot string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	if strings.TrimSpace(projectRoot) == "" {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(projectRoot, path)
 }
 
 // loadJSONFile decodes a settings JSON file. Missing files return (nil, nil).

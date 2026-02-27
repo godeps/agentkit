@@ -23,6 +23,9 @@ func TestOptionsWithDefaults(t *testing.T) {
 	if got.ProjectRoot != filepath.Clean(wantRoot) {
 		t.Fatalf("unexpected project root %q", got.ProjectRoot)
 	}
+	if got.ConfigRoot != filepath.Join(got.ProjectRoot, ".claude") {
+		t.Fatalf("unexpected config root %q", got.ConfigRoot)
+	}
 	if got.Sandbox.Root != got.ProjectRoot {
 		t.Fatalf("unexpected sandbox root %q", got.Sandbox.Root)
 	}

@@ -24,13 +24,20 @@ type persistedHistory struct {
 	Messages  []message.Message `json:"messages,omitempty"`
 }
 
-func newDiskHistoryPersister(projectRoot string) *diskHistoryPersister {
+func newDiskHistoryPersister(projectRoot, configRoot string) *diskHistoryPersister {
 	projectRoot = strings.TrimSpace(projectRoot)
-	if projectRoot == "" {
+	configRoot = strings.TrimSpace(configRoot)
+	if projectRoot == "" && configRoot == "" {
 		return nil
 	}
+	base := configRoot
+	if base == "" {
+		base = filepath.Join(projectRoot, ".claude")
+	} else if !filepath.IsAbs(base) && projectRoot != "" {
+		base = filepath.Join(projectRoot, base)
+	}
 	return &diskHistoryPersister{
-		dir: filepath.Join(projectRoot, ".claude", "history"),
+		dir: filepath.Join(base, "history"),
 	}
 }
 

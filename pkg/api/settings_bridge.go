@@ -16,10 +16,13 @@ import (
 func loadSettings(opts Options) (*config.Settings, error) {
 	loader := opts.SettingsLoader
 	if loader == nil {
-		loader = &config.SettingsLoader{ProjectRoot: opts.ProjectRoot}
+		loader = &config.SettingsLoader{ProjectRoot: opts.ProjectRoot, ConfigRoot: opts.ConfigRoot}
 	} else {
 		clone := *loader // avoid mutating caller-provided loader
 		loader = &clone
+		if strings.TrimSpace(loader.ConfigRoot) == "" {
+			loader.ConfigRoot = opts.ConfigRoot
+		}
 	}
 	loader.FS = opts.fsLayer
 

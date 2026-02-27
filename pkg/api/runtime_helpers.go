@@ -193,16 +193,27 @@ func registerSubagents(registrations []SubagentRegistration) (*subagents.Manager
 
 type loaderOptions struct {
 	ProjectRoot string
+	ConfigRoot  string
 	UserHome    string
 	EnableUser  bool
+	SkillsDirs  []string
+	SkillsRec   *bool
 	fs          *config.FS
 }
 
 func buildLoaderOptions(opts Options) loaderOptions {
+	var skillsRec *bool
+	if opts.SkillsRecursive != nil {
+		v := *opts.SkillsRecursive
+		skillsRec = &v
+	}
 	return loaderOptions{
 		ProjectRoot: opts.ProjectRoot,
+		ConfigRoot:  opts.ConfigRoot,
 		UserHome:    "",
 		EnableUser:  false,
+		SkillsDirs:  append([]string(nil), opts.SkillsDirs...),
+		SkillsRec:   skillsRec,
 		fs:          opts.fsLayer,
 	}
 }
@@ -211,6 +222,7 @@ func buildCommandsExecutor(opts Options) (*commands.Executor, []error) {
 	loader := buildLoaderOptions(opts)
 	fsRegs, errs := commands.LoadFromFS(commands.LoaderOptions{
 		ProjectRoot: loader.ProjectRoot,
+		ConfigRoot:  loader.ConfigRoot,
 		UserHome:    loader.UserHome,
 		EnableUser:  loader.EnableUser,
 		FS:          loader.fs,
@@ -263,8 +275,11 @@ func buildSkillsRegistry(opts Options) (*skills.Registry, []error) {
 	loader := buildLoaderOptions(opts)
 	fsRegs, errs := skills.LoadFromFS(skills.LoaderOptions{
 		ProjectRoot: loader.ProjectRoot,
+		ConfigRoot:  loader.ConfigRoot,
 		UserHome:    loader.UserHome,
 		EnableUser:  loader.EnableUser,
+		Directories: loader.SkillsDirs,
+		Recursive:   loader.SkillsRec,
 		FS:          loader.fs,
 	})
 
@@ -315,6 +330,7 @@ func buildSubagentsManager(opts Options) (*subagents.Manager, []error) {
 	loader := buildLoaderOptions(opts)
 	projectRegs, errs := subagents.LoadFromFS(subagents.LoaderOptions{
 		ProjectRoot: loader.ProjectRoot,
+		ConfigRoot:  loader.ConfigRoot,
 		UserHome:    loader.UserHome,
 		EnableUser:  false,
 		FS:          loader.fs,

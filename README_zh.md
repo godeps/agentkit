@@ -606,9 +606,11 @@ customMiddleware := middleware.Middleware{
 - [架构文档](docs/architecture.md) - 详细架构分析
 - [入门指南](docs/getting-started.md) - 分步教程
 - [API 参考](docs/api-reference.md) - API 文档
+- [SDK 调用指南](docs/sdk-calling-guide.md) - 从初始化到流式调用的完整接入说明
 - [安全实践](docs/security.md) - 安全配置指南
 - [自定义工具指南](docs/custom-tools-guide.md) - 自定义工具注册与使用
 - [HTTP API 指南](examples/03-http/README.md) - HTTP 服务器使用说明
+- [HTTP 外部调用指南](docs/http-external-calling-guide.md) - Java/Python 通过 HTTP 接入示例
 - [开发计划](.claude/specs/claude-code-rewrite/dev-plan.md) - 架构设计计划
 - [完成报告](.claude/specs/claude-code-rewrite/COMPLETION_REPORT.md) - 实现报告
 

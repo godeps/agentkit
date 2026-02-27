@@ -174,7 +174,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 
 	var rulesLoader *config.RulesLoader
 	if opts.RulesEnabled == nil || (opts.RulesEnabled != nil && *opts.RulesEnabled) {
-		rulesLoader = config.NewRulesLoader(opts.ProjectRoot)
+		rulesLoader = config.NewRulesLoaderWithConfigRoot(opts.ProjectRoot, opts.ConfigRoot)
 		if _, err := rulesLoader.LoadRules(); err != nil {
 			log.Printf("rules loader warning: %v", err)
 		}
@@ -190,7 +190,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		retainDays = *settings.CleanupPeriodDays
 	}
 	if retainDays > 0 {
-		historyPersister = newDiskHistoryPersister(opts.ProjectRoot)
+		historyPersister = newDiskHistoryPersister(opts.ProjectRoot, opts.ConfigRoot)
 		if historyPersister != nil {
 			histories.loader = historyPersister.Load
 			if err := historyPersister.Cleanup(retainDays); err != nil {

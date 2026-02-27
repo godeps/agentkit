@@ -24,6 +24,7 @@ type Rule struct {
 // RulesLoader loads markdown rules under .claude/rules and watches for changes.
 type RulesLoader struct {
 	projectRoot string
+	configRoot  string
 	rules       []Rule
 	mu          sync.RWMutex
 	watcher     *fsnotify.Watcher
@@ -35,8 +36,22 @@ func NewRulesLoader(projectRoot string) *RulesLoader {
 	return &RulesLoader{projectRoot: projectRoot}
 }
 
+func NewRulesLoaderWithConfigRoot(projectRoot, configRoot string) *RulesLoader {
+	return &RulesLoader{projectRoot: projectRoot, configRoot: configRoot}
+}
+
 func (l *RulesLoader) rulesDir() string {
 	root := strings.TrimSpace(l.projectRoot)
+	configRoot := strings.TrimSpace(l.configRoot)
+	if configRoot != "" {
+		if filepath.IsAbs(configRoot) {
+			return filepath.Join(configRoot, "rules")
+		}
+		if root == "" {
+			root = "."
+		}
+		return filepath.Join(root, configRoot, "rules")
+	}
 	if root == "" {
 		root = "."
 	}
