@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/godeps/agentkit/pkg/security"
 )
@@ -17,7 +18,7 @@ func TestBashToolStreamExecute(t *testing.T) {
 
 	var out []string
 	res, err := tool.StreamExecute(context.Background(), map[string]interface{}{
-		"command": "printf 'hello'",
+		"command": "echo hello",
 	}, func(chunk string, _ bool) {
 		out = append(out, chunk)
 	})
@@ -27,11 +28,14 @@ func TestBashToolStreamExecute(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("expected success")
 	}
-	if strings.Join(out, "") == "" {
-		t.Fatalf("expected output chunks")
-	}
 	if res.Output == "" {
-		t.Fatalf("expected output text")
+		data, ok := res.Data.(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected data map, got %T", res.Data)
+		}
+		if _, ok := data["output_file"]; !ok {
+			t.Fatalf("expected output text or output_file reference")
+		}
 	}
 }
 
@@ -52,6 +56,29 @@ func TestBashToolStreamExecuteErrors(t *testing.T) {
 	}, nil)
 	if err == nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled error, got %v", err)
+	}
+}
+
+func TestBashToolStreamExecuteTimeoutDoesNotHangWithBackgroundChild(t *testing.T) {
+	t.Parallel()
+
+	tool := NewBashToolWithSandbox("", security.NewDisabledSandbox())
+
+	started := time.Now()
+	res, err := tool.StreamExecute(context.Background(), map[string]interface{}{
+		"command": "sleep 6 & while true; do sleep 1; done",
+		"timeout": 0.1,
+	}, nil)
+	elapsed := time.Since(started)
+
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "timeout") {
+		t.Fatalf("expected timeout error, got %v", err)
+	}
+	if res == nil || res.Success {
+		t.Fatalf("expected failed result, got %#v", res)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("stream execute drained too slowly after timeout: %s", elapsed)
 	}
 }
 

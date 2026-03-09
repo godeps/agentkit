@@ -13,6 +13,7 @@ type NaiveCounter struct{}
 // Count implements TokenCounter.
 func (NaiveCounter) Count(msg Message) int {
 	tokens := len(msg.Content)/4 + len(msg.Role)/10
+	tokens += len(msg.ReasoningContent) / 4
 	for _, block := range msg.ContentBlocks {
 		switch block.Type {
 		case ContentBlockText:
@@ -29,6 +30,7 @@ func (NaiveCounter) Count(msg Message) int {
 	}
 	for _, call := range msg.ToolCalls {
 		tokens += len(call.Name)
+		tokens += len(call.Result) / 4
 		for k, v := range call.Arguments {
 			tokens += len(k)
 			switch val := v.(type) {

@@ -67,22 +67,46 @@ func (b *BashTool) StreamExecute(ctx context.Context, params map[string]interfac
 		return nil, fmt.Errorf("start command: %w", err)
 	}
 
+	readCtx, stopReads := context.WithCancel(execCtx)
+	defer stopReads()
+	defer stdoutPipe.Close()
+	defer stderrPipe.Close()
+
+	var closePipesOnce sync.Once
+	closePipes := func() {
+		closePipesOnce.Do(func() {
+			_ = stdoutPipe.Close()
+			_ = stderrPipe.Close()
+		})
+	}
+
+	cancelWatcherDone := make(chan struct{})
+	go func() {
+		select {
+		case <-execCtx.Done():
+			stopReads()
+			closePipes()
+		case <-cancelWatcherDone:
+		}
+	}()
+
 	var stdoutErr, stderrErr error
 	var wg sync.WaitGroup
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		stdoutErr = consumeStream(execCtx, stdoutPipe, emit, spool, false)
+		stdoutErr = consumeStream(readCtx, stdoutPipe, emit, spool, false)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		stderrErr = consumeStream(execCtx, stderrPipe, emit, spool, true)
+		stderrErr = consumeStream(readCtx, stderrPipe, emit, spool, true)
 	}()
 
 	wg.Wait()
+	close(cancelWatcherDone)
 	waitErr := cmd.Wait()
 	duration := time.Since(start)
 
@@ -144,6 +168,9 @@ func consumeStream(ctx context.Context, r io.ReadCloser, emit func(chunk string,
 		}
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
+		if ctx.Err() != nil || errors.Is(err, os.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+			return nil
+		}
 		return err
 	}
 	return nil
