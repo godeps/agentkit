@@ -232,7 +232,7 @@ bus.Close()
   - **Sandbox**: `Sandbox SandboxOptions`
   - **Token Tracking**: `TokenTracking bool`, `TokenCallback TokenCallback`
   - **Permissions**: `PermissionRequestHandler`, `ApprovalQueue *security.ApprovalQueue`, `ApprovalApprover string`, `ApprovalWhitelistTTL time.Duration`, `ApprovalWait bool`
-  - **Auto Compact**: `AutoCompact CompactConfig` (with `Enabled`, `Threshold`, `PreserveCount`, `SummaryModel`, `PreserveInitial`, `InitialCount`, `PreserveUserText`, `UserTextTokens`)
+  - **Auto Compact**: `AutoCompact CompactConfig` (with `Enabled`, `Threshold`, `PreserveCount`, `SummaryModel`, `ContextLimit`, `SummaryMaxTokens`, `PreserveInitial`, `InitialCount`, `PreserveUserText`, `UserTextTokens`)
   - **Observability**: `OTEL OTELConfig` (with `Enabled`, `ServiceName`, `Endpoint`)
   `withDefaults` sets `EntryPoint`, `Mode.EntryPoint`, `ProjectRoot`, `Sandbox.Root`, `MaxSessions`.
 - `type ModelFactory interface` (`options.go:134`) has a single method `Model(ctx context.Context) (model.Model, error)`. `ModelFactoryFunc` adapts a plain function to this interface.
@@ -383,7 +383,7 @@ rt, _ := api.New(ctx, api.Options{
 
 ### Auto Compact
 
-- `type CompactConfig` (`pkg/api/compact.go:19`) configures automatic context compaction with fields: `Enabled`, `Threshold` (trigger ratio, default 0.8), `PreserveCount` (keep latest N messages, default 5), `SummaryModel` (model tier/name for summary), `PreserveInitial`, `InitialCount`, `PreserveUserText`, `UserTextTokens`.
+- `type CompactConfig` (`pkg/api/compact.go:19`) configures automatic context compaction with fields: `Enabled`, `Threshold` (trigger ratio, default 0.8), `PreserveCount` (keep latest N messages, default 5), `SummaryModel` (model tier/name for summary), `ContextLimit` (fallback token limit when `Options.TokenLimit` is unset), `SummaryMaxTokens` (token budget for generated summary), `PreserveInitial`, `InitialCount`, `PreserveUserText`, `UserTextTokens`.
 - Set via `Options.AutoCompact` or `WithAutoCompact(config)`.
 - Uses a separate model for summarization to reduce costs.
 

@@ -17,10 +17,12 @@ import (
 
 // CompactConfig controls automatic context compaction.
 type CompactConfig struct {
-	Enabled       bool    `json:"enabled"`
-	Threshold     float64 `json:"threshold"`      // trigger ratio (default 0.8)
-	PreserveCount int     `json:"preserve_count"` // keep latest N messages (default 5)
-	SummaryModel  string  `json:"summary_model"`  // model tier/name used for summary
+	Enabled          bool    `json:"enabled"`
+	Threshold        float64 `json:"threshold"`          // trigger ratio (default 0.8)
+	PreserveCount    int     `json:"preserve_count"`     // keep latest N messages (default 5)
+	SummaryModel     string  `json:"summary_model"`      // model tier/name used for summary
+	ContextLimit     int     `json:"context_limit"`      // fallback token limit when Options.TokenLimit is unset
+	SummaryMaxTokens int     `json:"summary_max_tokens"` // token budget for generated summary
 
 	PreserveInitial  bool `json:"preserve_initial"`   // keep initial messages when compacting
 	InitialCount     int  `json:"initial_count"`      // keep first N messages from the compacted prefix
@@ -37,10 +39,10 @@ type CompactConfig struct {
 }
 
 const (
-	defaultCompactThreshold   = 0.8
-	defaultCompactPreserve    = 5
-	defaultClaudeContextLimit = 200000
-	summaryMaxTokens          = 1024
+	defaultCompactThreshold = 0.8
+	defaultCompactPreserve  = 5
+	defaultContextLimit     = 200000
+	defaultSummaryMaxTokens = 1024
 )
 
 var errNoCompaction = errors.New("api: nothing to compact")
@@ -57,6 +59,12 @@ func (c CompactConfig) withDefaults() CompactConfig {
 		cfg.PreserveCount = 1
 	}
 	cfg.SummaryModel = strings.TrimSpace(cfg.SummaryModel)
+	if cfg.ContextLimit <= 0 {
+		cfg.ContextLimit = defaultContextLimit
+	}
+	if cfg.SummaryMaxTokens <= 0 {
+		cfg.SummaryMaxTokens = defaultSummaryMaxTokens
+	}
 	if cfg.InitialCount < 0 {
 		cfg.InitialCount = 0
 	}
@@ -93,7 +101,7 @@ func newCompactor(projectRoot string, cfg CompactConfig, mdl model.Model, tokenL
 	}
 	limit := tokenLimit
 	if limit <= 0 {
-		limit = defaultClaudeContextLimit
+		limit = cfg.ContextLimit
 	}
 	rollout := newRolloutWriter(projectRoot, cfg.RolloutDir)
 	return &compactor{
@@ -297,7 +305,7 @@ func (c *compactor) compact(ctx context.Context, hist *message.History, snapshot
 		Messages:  convertMessages(summarize),
 		System:    summarySystemPrompt,
 		Model:     c.cfg.SummaryModel,
-		MaxTokens: summaryMaxTokens,
+		MaxTokens: c.cfg.SummaryMaxTokens,
 	}
 	resp, err := c.completeSummary(ctx, req)
 	if err != nil {
