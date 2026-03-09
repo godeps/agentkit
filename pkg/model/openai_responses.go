@@ -76,7 +76,10 @@ func (m *openaiResponsesModel) Complete(ctx context.Context, req Request) (*Resp
 	recordModelRequest(ctx, req)
 	var resp *Response
 	err := m.doWithRetry(ctx, func(ctx context.Context) error {
-		params := m.buildResponsesParams(req)
+		params, err := m.buildResponsesParams(req)
+		if err != nil {
+			return err
+		}
 
 		response, err := m.responses.New(ctx, params)
 		if err != nil {
@@ -99,7 +102,10 @@ func (m *openaiResponsesModel) CompleteStream(ctx context.Context, req Request, 
 	recordModelRequest(ctx, req)
 
 	return m.doWithRetry(ctx, func(ctx context.Context) error {
-		params := m.buildResponsesParams(req)
+		params, err := m.buildResponsesParams(req)
+		if err != nil {
+			return err
+		}
 
 		stream := m.responses.NewStreaming(ctx, params)
 		if stream == nil {
@@ -234,7 +240,7 @@ func (a *responsesToolCallAccumulator) toToolCall() *ToolCall {
 	}
 }
 
-func (m *openaiResponsesModel) buildResponsesParams(req Request) responses.ResponseNewParams {
+func (m *openaiResponsesModel) buildResponsesParams(req Request) (responses.ResponseNewParams, error) {
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = m.maxTokens
@@ -261,6 +267,14 @@ func (m *openaiResponsesModel) buildResponsesParams(req Request) responses.Respo
 		params.Tools = convertToolsToResponsesAPI(req.Tools)
 	}
 
+	if req.ResponseFormat != nil {
+		textConfig, err := buildResponsesTextConfig(req.ResponseFormat)
+		if err != nil {
+			return params, err
+		}
+		params.Text = textConfig
+	}
+
 	// Set temperature
 	if m.temperature != nil {
 		params.Temperature = openai.Float(*m.temperature)
@@ -273,7 +287,40 @@ func (m *openaiResponsesModel) buildResponsesParams(req Request) responses.Respo
 		params.User = openai.String(sessionID)
 	}
 
-	return params
+	return params, nil
+}
+
+func buildResponsesTextConfig(format *ResponseFormat) (responses.ResponseTextConfigParam, error) {
+	if format == nil {
+		return responses.ResponseTextConfigParam{}, nil
+	}
+
+	switch strings.TrimSpace(format.Type) {
+	case "", "text":
+		return responses.ResponseTextConfigParam{}, nil
+	case "json_object":
+		obj := shared.NewResponseFormatJSONObjectParam()
+		return responses.ResponseTextConfigParam{
+			Format: responses.ResponseFormatTextConfigUnionParam{OfJSONObject: &obj},
+		}, nil
+	case "json_schema":
+		schema, err := validateResponseFormatJSONSchema(format.JSONSchema)
+		if err != nil {
+			return responses.ResponseTextConfigParam{}, err
+		}
+		return responses.ResponseTextConfigParam{
+			Format: responses.ResponseFormatTextConfigUnionParam{
+				OfJSONSchema: &responses.ResponseFormatTextJSONSchemaConfigParam{
+					Name:        schema.Name,
+					Schema:      format.JSONSchema.Schema,
+					Description: schema.Description,
+					Strict:      schema.Strict,
+				},
+			},
+		}, nil
+	default:
+		return responses.ResponseTextConfigParam{}, nil
+	}
 }
 
 func (m *openaiResponsesModel) selectModel(override string) string {

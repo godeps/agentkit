@@ -894,7 +894,8 @@ func TestOpenAIResponsesModel_BuildResponsesParams(t *testing.T) {
 			Messages: []Message{{Role: "user", Content: "Hello"}},
 		}
 
-		params := mdl.buildResponsesParams(req)
+		params, err := mdl.buildResponsesParams(req)
+		require.NoError(t, err)
 		assert.Equal(t, "gpt-4o", string(params.Model))
 		assert.Equal(t, int64(4096), params.MaxOutputTokens.Value)
 	})
@@ -910,7 +911,8 @@ func TestOpenAIResponsesModel_BuildResponsesParams(t *testing.T) {
 			MaxTokens: 1000,
 		}
 
-		params := mdl.buildResponsesParams(req)
+		params, err := mdl.buildResponsesParams(req)
+		require.NoError(t, err)
 		assert.Equal(t, int64(1000), params.MaxOutputTokens.Value)
 	})
 
@@ -925,7 +927,8 @@ func TestOpenAIResponsesModel_BuildResponsesParams(t *testing.T) {
 			Messages: []Message{{Role: "user", Content: "Hello"}},
 		}
 
-		params := mdl.buildResponsesParams(req)
+		params, err := mdl.buildResponsesParams(req)
+		require.NoError(t, err)
 		require.True(t, params.Instructions.Valid())
 		assert.Equal(t, "Be helpful", params.Instructions.Value)
 	})
@@ -942,7 +945,8 @@ func TestOpenAIResponsesModel_BuildResponsesParams(t *testing.T) {
 			System:   "Be concise",
 		}
 
-		params := mdl.buildResponsesParams(req)
+		params, err := mdl.buildResponsesParams(req)
+		require.NoError(t, err)
 		require.True(t, params.Instructions.Valid())
 		assert.Equal(t, "Be concise", params.Instructions.Value)
 	})
@@ -961,7 +965,8 @@ func TestOpenAIResponsesModel_BuildResponsesParams(t *testing.T) {
 			},
 		}
 
-		params := mdl.buildResponsesParams(req)
+		params, err := mdl.buildResponsesParams(req)
+		require.NoError(t, err)
 		assert.Len(t, params.Tools, 2)
 	})
 
@@ -977,7 +982,8 @@ func TestOpenAIResponsesModel_BuildResponsesParams(t *testing.T) {
 			Messages: []Message{{Role: "user", Content: "Hello"}},
 		}
 
-		params := mdl.buildResponsesParams(req)
+		params, err := mdl.buildResponsesParams(req)
+		require.NoError(t, err)
 		require.True(t, params.Temperature.Valid())
 		assert.Equal(t, 0.7, params.Temperature.Value)
 	})
@@ -996,7 +1002,8 @@ func TestOpenAIResponsesModel_BuildResponsesParams(t *testing.T) {
 			Temperature: &reqTemp,
 		}
 
-		params := mdl.buildResponsesParams(req)
+		params, err := mdl.buildResponsesParams(req)
+		require.NoError(t, err)
 		require.True(t, params.Temperature.Valid())
 		assert.Equal(t, 0.3, params.Temperature.Value)
 	})
@@ -1012,7 +1019,8 @@ func TestOpenAIResponsesModel_BuildResponsesParams(t *testing.T) {
 			SessionID: "session-123",
 		}
 
-		params := mdl.buildResponsesParams(req)
+		params, err := mdl.buildResponsesParams(req)
+		require.NoError(t, err)
 		require.True(t, params.User.Valid())
 		assert.Equal(t, "session-123", params.User.Value)
 	})
@@ -1028,7 +1036,80 @@ func TestOpenAIResponsesModel_BuildResponsesParams(t *testing.T) {
 			Model:    "gpt-4-turbo",
 		}
 
-		params := mdl.buildResponsesParams(req)
+		params, err := mdl.buildResponsesParams(req)
+		require.NoError(t, err)
 		assert.Equal(t, "gpt-4-turbo", string(params.Model))
+	})
+
+	t.Run("response format json object", func(t *testing.T) {
+		mdl := &openaiResponsesModel{
+			model:     "gpt-4o",
+			maxTokens: 4096,
+		}
+
+		req := Request{
+			Messages: []Message{{Role: "user", Content: "Hello"}},
+			ResponseFormat: &ResponseFormat{
+				Type: "json_object",
+			},
+		}
+
+		params, err := mdl.buildResponsesParams(req)
+		require.NoError(t, err)
+		require.NotNil(t, params.Text.Format.OfJSONObject)
+		assert.Nil(t, params.Text.Format.OfJSONSchema)
+	})
+
+	t.Run("response format json schema", func(t *testing.T) {
+		mdl := &openaiResponsesModel{
+			model:     "gpt-4o",
+			maxTokens: 4096,
+		}
+
+		req := Request{
+			Messages: []Message{{Role: "user", Content: "Hello"}},
+			ResponseFormat: &ResponseFormat{
+				Type: "json_schema",
+				JSONSchema: &OutputJSONSchema{
+					Name:        "storyboard",
+					Description: "Storyboard output",
+					Schema: map[string]any{
+						"type": "array",
+					},
+					Strict: true,
+				},
+			},
+		}
+
+		params, err := mdl.buildResponsesParams(req)
+		require.NoError(t, err)
+		require.NotNil(t, params.Text.Format.OfJSONSchema)
+		assert.Nil(t, params.Text.Format.OfJSONObject)
+		assert.Equal(t, "storyboard", params.Text.Format.OfJSONSchema.Name)
+		assert.Equal(t, "Storyboard output", params.Text.Format.OfJSONSchema.Description.Value)
+		assert.Equal(t, true, params.Text.Format.OfJSONSchema.Strict.Value)
+	})
+
+	t.Run("response format json schema requires name", func(t *testing.T) {
+		mdl := &openaiResponsesModel{
+			model:     "gpt-4o",
+			maxTokens: 4096,
+		}
+
+		req := Request{
+			Messages: []Message{{Role: "user", Content: "Hello"}},
+			ResponseFormat: &ResponseFormat{
+				Type: "json_schema",
+				JSONSchema: &OutputJSONSchema{
+					Schema: map[string]any{
+						"type": "array",
+					},
+				},
+			},
+		}
+
+		_, err := mdl.buildResponsesParams(req)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "response format json_schema name is required")
 	})
 }
