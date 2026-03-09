@@ -609,6 +609,7 @@ customMiddleware := middleware.Middleware{
 - [SDK 调用指南](docs/sdk-calling-guide.md) - 从初始化到流式调用的完整接入说明
 - [安全实践](docs/security.md) - 安全配置指南
 - [自定义工具指南](docs/custom-tools-guide.md) - 自定义工具注册与使用
+- [ACP 集成指南](docs/acp-integration.md) - ACP 的 stdio/进程内接入与协议覆盖测试说明
 - [HTTP API 指南](examples/03-http/README.md) - HTTP 服务器使用说明
 - [HTTP 外部调用指南](docs/http-external-calling-guide.md) - Java/Python 通过 HTTP 接入示例
 - [开发计划](.claude/specs/claude-code-rewrite/dev-plan.md) - 架构设计计划

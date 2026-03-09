@@ -14,9 +14,12 @@ import (
 	"strings"
 	"time"
 
+	acpserver "github.com/godeps/agentkit/pkg/acp"
 	"github.com/godeps/agentkit/pkg/api"
 	modelpkg "github.com/godeps/agentkit/pkg/model"
 )
+
+var serveACPStdio = acpserver.ServeStdio
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
@@ -43,6 +46,7 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	stream := flags.Bool("stream", false, "Stream events instead of waiting for completion")
 	verbose := flags.Bool("verbose", false, "Verbose stream diagnostics")
 	skillsRecursive := flags.Bool("skills-recursive", true, "Discover SKILL.md recursively")
+	acpMode := flags.Bool("acp", false, "Run ACP server over stdio")
 
 	var mcpServers multiValue
 	flags.Var(&mcpServers, "mcp", "Register an MCP server (repeatable)")
@@ -59,13 +63,6 @@ func run(argv []string, stdout, stderr io.Writer) error {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
 			*timeoutMs = parsed
 		}
-	}
-	prompt, err := resolvePrompt(*promptLiteral, *promptFile, flags.Args())
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(prompt) == "" {
-		return errors.New("prompt is empty")
 	}
 
 	provider := &modelpkg.AnthropicProvider{
@@ -96,6 +93,18 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	if *printConfig {
 		printEffectiveConfig(stderr, options, *timeoutMs)
 	}
+	if *acpMode {
+		return serveACPStdio(context.Background(), options, os.Stdin, stdout)
+	}
+
+	prompt, err := resolvePrompt(*promptLiteral, *promptFile, flags.Args())
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(prompt) == "" {
+		return errors.New("prompt is empty")
+	}
+
 	runtime, err := api.New(context.Background(), options)
 	if err != nil {
 		return fmt.Errorf("create runtime: %w", err)

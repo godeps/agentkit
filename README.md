@@ -688,6 +688,7 @@ customMiddleware := middleware.Funcs{
 - [SDK Calling Guide](docs/sdk-calling-guide.md) - End-to-end SDK integration and invocation patterns
 - [Security](docs/security.md) - Security configuration guide
 - [Custom Tools Guide](docs/custom-tools-guide.md) - Custom tool registration and usage
+- [ACP Integration](docs/acp-integration.md) - ACP stdio and in-process integration, plus protocol coverage tests
 - [Trace System](docs/trace-system.md) - OpenTelemetry and HTTP trace setup
 - [Smart Defaults](docs/smart-defaults.md) - Auto-configuration by EntryPoint
 - [HTTP API Guide](examples/03-http/README.md) - HTTP server instructions
