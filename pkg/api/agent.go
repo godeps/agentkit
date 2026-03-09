@@ -579,7 +579,7 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		trimmer:       rt.newTrimmer(),
 		tools:         availableTools(rt.registry, prep.toolWhitelist),
 		systemPrompt:  rt.opts.SystemPrompt,
-		outputSchema:  cloneResponseFormat(rt.opts.OutputSchema),
+		outputSchema:  effectiveOutputSchema(prep.normalized.OutputSchema, rt.opts.OutputSchema),
 		rulesLoader:   rt.rulesLoader,
 		enableCache:   enableCache,
 		hooks:         hookAdapter,
@@ -974,6 +974,13 @@ func (rt *Runtime) newTrimmer() *message.Trimmer {
 		return nil
 	}
 	return message.NewTrimmer(rt.opts.TokenLimit, nil)
+}
+
+func effectiveOutputSchema(requestSchema, defaultSchema *model.ResponseFormat) *model.ResponseFormat {
+	if requestSchema != nil {
+		return cloneResponseFormat(requestSchema)
+	}
+	return cloneResponseFormat(defaultSchema)
 }
 
 // ----------------- adapters -----------------

@@ -101,3 +101,31 @@ func TestOptionsFrozenClonesCollections(t *testing.T) {
 		t.Fatalf("Subagents.BaseContext.Metadata=%v, want map[k:v]", frozen.Subagents[0].Definition.BaseContext.Metadata)
 	}
 }
+
+func TestRequestNormalizedClonesOutputSchema(t *testing.T) {
+	req := Request{
+		Prompt: "hi",
+		OutputSchema: &model.ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &model.OutputJSONSchema{
+				Name: "storyboard",
+				Schema: map[string]any{
+					"type": "array",
+				},
+			},
+		},
+	}
+
+	normalized := req.normalized(ModeContext{EntryPoint: EntryPointCLI}, "sess")
+	if normalized.OutputSchema == nil || normalized.OutputSchema.JSONSchema == nil {
+		t.Fatalf("expected normalized output schema")
+	}
+	if normalized.OutputSchema.JSONSchema.Name != "storyboard" {
+		t.Fatalf("unexpected output schema name %q", normalized.OutputSchema.JSONSchema.Name)
+	}
+
+	req.OutputSchema.JSONSchema.Name = "changed"
+	if normalized.OutputSchema.JSONSchema.Name != "storyboard" {
+		t.Fatalf("normalized OutputSchema=%+v, want storyboard", normalized.OutputSchema)
+	}
+}

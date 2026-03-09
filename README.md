@@ -291,6 +291,29 @@ if err != nil {
 defer rt.Close()
 ```
 
+Per-request overrides are supported through `api.Request.OutputSchema`. Request-level schema wins over the runtime default, and `Type: "text"` explicitly disables a default structured-output contract for that call.
+
+```go
+resp, err := rt.Run(ctx, api.Request{
+    SessionID: "demo",
+    Prompt:    "generate a release plan",
+    OutputSchema: &model.ResponseFormat{
+        Type: "json_schema",
+        JSONSchema: &model.OutputJSONSchema{
+            Name: "release_plan",
+            Schema: map[string]any{
+                "type": "object",
+                "properties": map[string]any{
+                    "title": map[string]any{"type": "string"},
+                },
+                "required": []string{"title"},
+            },
+        },
+    },
+})
+_ = resp
+```
+
 Structured output currently applies to OpenAI-compatible `/chat/completions` and `/responses` transports. Other providers keep their existing behavior unless they add explicit support.
 
 ### Concurrent Usage

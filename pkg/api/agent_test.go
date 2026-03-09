@@ -94,6 +94,91 @@ func TestRuntimeInjectsOutputSchemaIntoModelRequest(t *testing.T) {
 		t.Fatalf("unexpected response format %+v", mdl.requests[0].ResponseFormat)
 	}
 }
+
+func TestRuntimeRequestOutputSchemaOverridesDefault(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{responses: []*model.Response{{Message: model.Message{Role: "assistant", Content: "done"}}}}
+	rt, err := New(context.Background(), Options{
+		ProjectRoot: root,
+		Model:       mdl,
+		OutputSchema: &model.ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &model.OutputJSONSchema{
+				Name:   "default_schema",
+				Schema: map[string]any{"type": "object"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	_, err = rt.Run(context.Background(), Request{
+		Prompt: "hello",
+		OutputSchema: &model.ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &model.OutputJSONSchema{
+				Name:   "request_schema",
+				Schema: map[string]any{"type": "array"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(mdl.requests) == 0 {
+		t.Fatal("expected model request")
+	}
+	if mdl.requests[0].ResponseFormat == nil || mdl.requests[0].ResponseFormat.JSONSchema == nil {
+		t.Fatalf("unexpected response format %+v", mdl.requests[0].ResponseFormat)
+	}
+	if mdl.requests[0].ResponseFormat.JSONSchema.Name != "request_schema" {
+		t.Fatalf("ResponseFormat=%+v, want request_schema", mdl.requests[0].ResponseFormat)
+	}
+}
+
+func TestRuntimeRequestOutputSchemaTextDisablesDefault(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{responses: []*model.Response{{Message: model.Message{Role: "assistant", Content: "done"}}}}
+	rt, err := New(context.Background(), Options{
+		ProjectRoot: root,
+		Model:       mdl,
+		OutputSchema: &model.ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &model.OutputJSONSchema{
+				Name:   "default_schema",
+				Schema: map[string]any{"type": "object"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	_, err = rt.Run(context.Background(), Request{
+		Prompt: "hello",
+		OutputSchema: &model.ResponseFormat{
+			Type: "text",
+		},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(mdl.requests) == 0 {
+		t.Fatal("expected model request")
+	}
+	if mdl.requests[0].ResponseFormat == nil {
+		t.Fatal("expected response format on request")
+	}
+	if mdl.requests[0].ResponseFormat.Type != "text" {
+		t.Fatalf("ResponseFormat=%+v, want text", mdl.requests[0].ResponseFormat)
+	}
+	if mdl.requests[0].ResponseFormat.JSONSchema != nil {
+		t.Fatalf("ResponseFormat.JSONSchema=%+v, want nil", mdl.requests[0].ResponseFormat.JSONSchema)
+	}
+}
 func TestRuntimePropagatesModelError(t *testing.T) {
 	root := newClaudeProject(t)
 	mdl := &stubModel{err: errors.New("model refused")}

@@ -280,6 +280,7 @@ type Request struct {
 	RequestID         string    `json:"request_id,omitempty"` // Auto-generated UUID or user-provided
 	Model             ModelTier // Optional: override model tier for this request
 	EnablePromptCache *bool     // Optional: enable prompt caching (nil uses global default)
+	OutputSchema      *model.ResponseFormat
 	Traits            []string
 	Tags              map[string]string
 	Channels          []string
@@ -630,6 +631,7 @@ func (r Request) normalized(defaultMode ModeContext, fallbackSession string) Req
 	if len(req.Traits) > 0 {
 		req.Traits = cloneStrings(req.Traits)
 	}
+	req.OutputSchema = cloneResponseFormat(req.OutputSchema)
 	return req
 }
 

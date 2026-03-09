@@ -261,6 +261,29 @@ if err != nil {
 defer rt.Close()
 ```
 
+也支持通过 `api.Request.OutputSchema` 做单次请求覆盖。请求级 schema 的优先级高于 runtime 默认值，传 `Type: "text"` 则可以显式关闭某次调用的默认结构化输出约束。
+
+```go
+resp, err := rt.Run(ctx, api.Request{
+    SessionID: "demo",
+    Prompt:    "生成一个发布计划",
+    OutputSchema: &model.ResponseFormat{
+        Type: "json_schema",
+        JSONSchema: &model.OutputJSONSchema{
+            Name: "release_plan",
+            Schema: map[string]any{
+                "type": "object",
+                "properties": map[string]any{
+                    "title": map[string]any{"type": "string"},
+                },
+                "required": []string{"title"},
+            },
+        },
+    },
+})
+_ = resp
+```
+
 当前首版只覆盖 OpenAI 兼容的 `/chat/completions` 和 `/responses` 两条链路。其他 provider 会保持原有行为，直到显式实现支持。
 
 ### 并发使用
