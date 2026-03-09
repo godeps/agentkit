@@ -160,7 +160,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	if err := registerMCPServers(ctx, registry, sbox, mcpServers); err != nil {
 		return nil, err
 	}
-	executor := tool.NewExecutor(registry, sbox).WithOutputPersister(tool.NewOutputPersister())
+	executor := tool.NewExecutor(registry, sbox).WithOutputPersister(newOutputPersister(settings))
 
 	recorder := defaultHookRecorder()
 	hooks := newHookExecutor(opts, recorder, settings)
@@ -1649,6 +1649,23 @@ func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, s
 	}
 
 	return factories
+}
+
+func newOutputPersister(settings *config.Settings) *tool.OutputPersister {
+	persister := tool.NewOutputPersister()
+	if settings == nil || settings.ToolOutput == nil {
+		return persister
+	}
+	if settings.ToolOutput.DefaultThresholdBytes > 0 {
+		persister.DefaultThresholdBytes = settings.ToolOutput.DefaultThresholdBytes
+	}
+	if len(settings.ToolOutput.PerToolThresholdBytes) > 0 {
+		persister.PerToolThresholdBytes = make(map[string]int, len(settings.ToolOutput.PerToolThresholdBytes))
+		for name, threshold := range settings.ToolOutput.PerToolThresholdBytes {
+			persister.PerToolThresholdBytes[name] = threshold
+		}
+	}
+	return persister
 }
 
 func builtinOrder(entry EntryPoint) []string {

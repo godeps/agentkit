@@ -122,7 +122,16 @@ func createToolOutputFile(dir string) (*os.File, string, error) {
 }
 
 func formatToolOutputReference(path string) string {
-	return fmt.Sprintf("[Output saved to: %s]", path)
+	info, err := os.Stat(path)
+	size := int64(0)
+	if err == nil {
+		size = info.Size()
+	}
+	sizeText := "unknown size"
+	if size >= 0 {
+		sizeText = fmt.Sprintf("%d bytes", size)
+	}
+	return fmt.Sprintf("[Large output persisted: %s. Full output: %s]", sizeText, path)
 }
 
 func sanitizePathComponent(value string) string {

@@ -20,8 +20,11 @@ func TestOutputPersisterMaybePersist(t *testing.T) {
 	if err := p.MaybePersist(call, res); err != nil {
 		t.Fatalf("persist failed: %v", err)
 	}
-	if res.OutputRef == nil || !strings.Contains(res.Output, "Output saved") {
+	if res.OutputRef == nil || !strings.Contains(res.Output, "Large output persisted") {
 		t.Fatalf("expected output reference, got %v", res.Output)
+	}
+	if !strings.Contains(res.Output, "Full output:") || !strings.Contains(res.Output, "5 bytes") {
+		t.Fatalf("expected output summary with size and path, got %q", res.Output)
 	}
 	if !strings.Contains(res.OutputRef.Path, filepath.Clean(dir)) {
 		t.Fatalf("unexpected output path %q", res.OutputRef.Path)

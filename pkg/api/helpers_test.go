@@ -336,6 +336,25 @@ func TestRegisterToolsAppendsCustomTools(t *testing.T) {
 	}
 }
 
+func TestNewOutputPersisterAppliesToolOutputSettings(t *testing.T) {
+	settings := &config.Settings{
+		ToolOutput: &config.ToolOutputConfig{
+			DefaultThresholdBytes: 123,
+			PerToolThresholdBytes: map[string]int{
+				"read": 456,
+			},
+		},
+	}
+
+	persister := newOutputPersister(settings)
+	if persister.DefaultThresholdBytes != 123 {
+		t.Fatalf("expected default threshold 123, got %d", persister.DefaultThresholdBytes)
+	}
+	if got := persister.PerToolThresholdBytes["read"]; got != 456 {
+		t.Fatalf("expected per-tool threshold 456, got %d", got)
+	}
+}
+
 func TestRegisterToolsLegacyToolsOverride(t *testing.T) {
 	registry := tool.NewRegistry()
 	legacy := &namedTool{name: "legacy"}
