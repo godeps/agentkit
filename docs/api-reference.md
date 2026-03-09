@@ -79,13 +79,15 @@ fmt.Printf("final output: %s (tools=%d)\n", out.Content, len(out.ToolCalls))
 ## pkg/model — Model Interface, Anthropic Provider, Options
 
 - `type Message`, `ToolCall`, `ToolDefinition` (`interface.go:33-73`) define model-level chat and callable tool descriptions using lightweight `string` + `map[string]any`. `Message` supports multimodal content via `ContentBlocks []ContentBlock` (takes precedence over `Content` when non-empty) and `ReasoningContent` for thinking models.
-- `type Request` (`interface.go:76`) aggregates `Messages`, `Tools`, `System`, `Model`, `SessionID`, `MaxTokens`, `Temperature` (pointer to distinguish unset from zero), `EnablePromptCache`. Callers must order messages correctly.
+- `type ResponseFormat` / `type OutputJSONSchema` (`interface.go:76-89`) describe provider-agnostic structured output requests. Supported `Type` values are `text`, `json_object`, and `json_schema`; `json_schema` requires a non-empty schema name plus a non-nil schema body.
+- `type Request` (`interface.go:92`) aggregates `Messages`, `Tools`, `System`, `Model`, `SessionID`, `MaxTokens`, `Temperature` (pointer to distinguish unset from zero), `EnablePromptCache`, `ResponseFormat`. Callers must order messages correctly.
 - `type Response` / `type Usage` (`interface.go:97-101`) provide token accounting; `CacheReadTokens` / `CacheCreationTokens` match Anthropic semantics.
 - `type StreamHandler func(StreamResult) error` (`interface.go:112`); `StreamResult` may carry `Delta`, `ToolCall`, `Response`, with `Final` marking completion.
 - `type Model interface` (`interface.go:115`) unifies `Complete(ctx, Request) (*Response, error)` and `CompleteStream(ctx, Request, StreamHandler) error`; the Agent layer remains model-agnostic.
 - `type Provider` and `ProviderFunc` (`provider.go:13-24`) allow deferred model construction; `ProviderFunc.Model` errors on nil functions to avoid silent panics.
 - `type AnthropicProvider struct` (`provider.go:27`) implements `Model(ctx)` with `CacheTTL`; `resolveAPIKey` supports explicit config or `ANTHROPIC_API_KEY`.
 - `func NewAnthropic(cfg AnthropicConfig) (Model, error)` (`anthropic.go:35`) initializes the Anthropic SDK, default token/retry settings, and `mapModelName`. `AnthropicConfig` accepts `HTTPClient` overrides.
+- `func NewOpenAI(cfg OpenAIConfig) (Model, error)` (`openai.go:53`) constructs an OpenAI-compatible model. `OpenAIConfig.UseResponses` switches between `/chat/completions` and `/responses`; structured output maps through both paths when `Request.ResponseFormat` is set.
 - `(*anthropicModel).Complete` and `CompleteStream` use `buildParams`, `msgs.New`, `msgs.NewStreaming` to call the official SDK. `CompleteStream` handles `ContentBlockDeltaEvent` / `ToolUse` / `MessageDelta`, and emits `StreamResult{Final: true}` when done.
 
 ```go
@@ -108,6 +110,7 @@ fmt.Printf("usage: %d tokens, stop reason=%s\n", resp.Usage.TotalTokens, resp.St
 ```
 
 - **Notes**: `AnthropicProvider` caches only one model instance; `CacheTTL <= 0` disables caching to avoid stale clients. `CompleteStream` requires a non-nil `StreamHandler`, otherwise returns `stream callback required`. With tools enabled, `convertTools` strictly validates schemas and fails fast on bad params.
+- **Structured output**: First-version support applies to OpenAI-compatible transports only. Non-OpenAI providers currently ignore `Request.ResponseFormat` unless they add explicit support.
 
 ### Streaming and Retry
 
@@ -224,6 +227,7 @@ bus.Close()
   - **Core**: `EntryPoint`, `Mode ModeContext`, `ProjectRoot`, `SettingsPath`, `SettingsOverrides *config.Settings`, `SettingsLoader *config.SettingsLoader`, `EmbedFS fs.FS`
   - **Model**: `Model model.Model` (direct instance), `ModelFactory ModelFactory` (interface with `Model(ctx) (model.Model, error)`), `ModelPool map[ModelTier]model.Model`, `SubagentModelMapping map[string]ModelTier`, `DefaultEnableCache bool`
   - **Prompt**: `SystemPrompt`, `RulesEnabled *bool` (nil = enabled, false = disabled)
+  - **Structured output**: `OutputSchema *model.ResponseFormat`
   - **Middleware**: `Middleware []middleware.Middleware`, `MiddlewareTimeout time.Duration`
   - **Limits**: `MaxIterations`, `Timeout`, `TokenLimit`, `MaxSessions`
   - **Tools**: `Tools []tool.Tool` (legacy override), `EnabledBuiltinTools []string` (nil = all, empty = none), `DisallowedTools []string`, `CustomTools []tool.Tool`, `MCPServers []string`

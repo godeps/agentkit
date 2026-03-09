@@ -16,6 +16,7 @@ agentsdk-go is a modular agent development framework that implements core Claude
 
 ### Core Capabilities
 - **Multi-model Support**: Subagent-level model binding via `ModelFactory` interface
+- **Structured Output**: OpenAI-compatible models can be constrained with `json_object` or `json_schema`
 - **Token Statistics**: Comprehensive token usage tracking with automatic accumulation
 - **Auto Compact**: Automatic context compression when token threshold reached
 - **Async Bash**: Background command execution with task management
@@ -258,6 +259,39 @@ for event := range events {
     }
 }
 ```
+
+### Structured Output
+
+OpenAI-compatible models support runtime-level structured output through `api.Options.OutputSchema`.
+
+```go
+rt, err := api.New(ctx, api.Options{
+    ModelFactory: &model.OpenAIProvider{
+        ModelName: "gpt-4o",
+    },
+    OutputSchema: &model.ResponseFormat{
+        Type: "json_schema",
+        JSONSchema: &model.OutputJSONSchema{
+            Name: "storyboard",
+            Schema: map[string]any{
+                "type": "object",
+                "properties": map[string]any{
+                    "title": map[string]any{"type": "string"},
+                },
+                "required": []string{"title"},
+                "additionalProperties": false,
+            },
+            Strict: true,
+        },
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer rt.Close()
+```
+
+Structured output currently applies to OpenAI-compatible `/chat/completions` and `/responses` transports. Other providers keep their existing behavior unless they add explicit support.
 
 ### Concurrent Usage
 

@@ -15,6 +15,7 @@ agentsdk-go 是一个模块化的 Agent 开发框架，实现 Claude Code 风格
 ### 功能概览
 
 - **多模型支持**：通过 `ModelFactory` 接口实现 Subagent 级别的模型绑定
+- **结构化输出**：OpenAI 兼容模型支持 `json_object` 和 `json_schema` 输出约束
 - **Token 统计**：支持 Token 用量追踪与累计
 - **自动 Compact**：当 Token 达到阈值时自动压缩上下文
 - **异步 Bash**：后台命令执行与任务管理
@@ -228,6 +229,39 @@ for event := range events {
     }
 }
 ```
+
+### 结构化输出
+
+可以通过 `api.Options.OutputSchema` 为 OpenAI 兼容模型声明结构化输出约束。
+
+```go
+rt, err := api.New(ctx, api.Options{
+    ModelFactory: &model.OpenAIProvider{
+        ModelName: "gpt-4o",
+    },
+    OutputSchema: &model.ResponseFormat{
+        Type: "json_schema",
+        JSONSchema: &model.OutputJSONSchema{
+            Name: "storyboard",
+            Schema: map[string]any{
+                "type": "object",
+                "properties": map[string]any{
+                    "title": map[string]any{"type": "string"},
+                },
+                "required": []string{"title"},
+                "additionalProperties": false,
+            },
+            Strict: true,
+        },
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer rt.Close()
+```
+
+当前首版只覆盖 OpenAI 兼容的 `/chat/completions` 和 `/responses` 两条链路。其他 provider 会保持原有行为，直到显式实现支持。
 
 ### 并发使用
 
