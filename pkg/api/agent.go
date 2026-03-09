@@ -579,6 +579,7 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		trimmer:       rt.newTrimmer(),
 		tools:         availableTools(rt.registry, prep.toolWhitelist),
 		systemPrompt:  rt.opts.SystemPrompt,
+		outputSchema:  cloneResponseFormat(rt.opts.OutputSchema),
 		rulesLoader:   rt.rulesLoader,
 		enableCache:   enableCache,
 		hooks:         hookAdapter,
@@ -985,6 +986,7 @@ type conversationModel struct {
 	trimmer       *message.Trimmer
 	tools         []model.ToolDefinition
 	systemPrompt  string
+	outputSchema  *model.ResponseFormat
 	rulesLoader   *config.RulesLoader
 	enableCache   bool // Enable prompt caching for this conversation
 	usage         model.Usage
@@ -1037,6 +1039,7 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 		Model:             "",
 		Temperature:       nil,
 		EnablePromptCache: m.enableCache,
+		ResponseFormat:    cloneResponseFormat(m.outputSchema),
 	}
 
 	// Populate middleware state with model request if available

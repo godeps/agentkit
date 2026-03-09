@@ -30,6 +30,15 @@ func TestOptionsFrozenClonesCollections(t *testing.T) {
 		Mode:       ModeContext{EntryPoint: EntryPointCLI, CLI: &CLIContext{Args: []string{"--x"}, Flags: map[string]string{"k": "v"}}},
 		Middleware: []middleware.Middleware{nil},
 		Tools:      []tool.Tool{&stubTool{name: "legacy"}},
+		OutputSchema: &model.ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &model.OutputJSONSchema{
+				Name: "storyboard",
+				Schema: map[string]any{
+					"type": "array",
+				},
+			},
+		},
 		EnabledBuiltinTools: []string{
 			"bash",
 		},
@@ -70,10 +79,21 @@ func TestOptionsFrozenClonesCollections(t *testing.T) {
 	if frozen.Mode.CLI.Flags["k"] != "v" {
 		t.Fatalf("Mode.CLI.Flags=%v, want map[k:v]", frozen.Mode.CLI.Flags)
 	}
+	if frozen.OutputSchema == nil || frozen.OutputSchema.JSONSchema == nil {
+		t.Fatalf("expected frozen output schema")
+	}
+	if frozen.OutputSchema.JSONSchema.Name != "storyboard" {
+		t.Fatalf("unexpected output schema name %q", frozen.OutputSchema.JSONSchema.Name)
+	}
 
 	opts.Skills[0].Definition.Metadata["k"] = "changed"
 	if frozen.Skills[0].Definition.Metadata["k"] != "v" {
 		t.Fatalf("Skills.Metadata=%v, want map[k:v]", frozen.Skills[0].Definition.Metadata)
+	}
+
+	opts.OutputSchema.JSONSchema.Name = "changed"
+	if frozen.OutputSchema.JSONSchema.Name != "storyboard" {
+		t.Fatalf("OutputSchema=%+v, want storyboard", frozen.OutputSchema)
 	}
 
 	opts.Subagents[0].Definition.BaseContext.Metadata["k"] = "changed"

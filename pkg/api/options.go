@@ -179,6 +179,9 @@ type Options struct {
 	// Prompt caching reduces costs for repeated context (system prompts, conversation history).
 	DefaultEnableCache bool
 
+	// OutputSchema constrains model text responses when the provider supports structured output.
+	OutputSchema *model.ResponseFormat
+
 	SystemPrompt string
 	RulesEnabled *bool // nil = 默认启用，false = 禁用
 
@@ -431,6 +434,7 @@ func (o Options) withDefaults() Options {
 // the original Options struct without racing against a live Runtime.
 func (o Options) frozen() Options {
 	o.Mode = freezeMode(o.Mode)
+	o.OutputSchema = cloneResponseFormat(o.OutputSchema)
 
 	if len(o.Middleware) > 0 {
 		o.Middleware = append([]middleware.Middleware(nil), o.Middleware...)
@@ -512,6 +516,21 @@ func (o Options) frozen() Options {
 	}
 
 	return o
+}
+
+func cloneResponseFormat(in *model.ResponseFormat) *model.ResponseFormat {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.JSONSchema != nil {
+		js := *in.JSONSchema
+		if len(in.JSONSchema.Schema) > 0 {
+			js.Schema = maps.Clone(in.JSONSchema.Schema)
+		}
+		out.JSONSchema = &js
+	}
+	return &out
 }
 
 func freezeSandboxOptions(in SandboxOptions) SandboxOptions {

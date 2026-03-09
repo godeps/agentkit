@@ -61,6 +61,39 @@ func TestRuntimeRunSimple(t *testing.T) {
 		t.Fatal("sandbox manager missing")
 	}
 }
+
+func TestRuntimeInjectsOutputSchemaIntoModelRequest(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{responses: []*model.Response{{Message: model.Message{Role: "assistant", Content: "done"}}}}
+	outputSchema := &model.ResponseFormat{
+		Type: "json_schema",
+		JSONSchema: &model.OutputJSONSchema{
+			Name: "storyboard",
+			Schema: map[string]any{
+				"type": "array",
+			},
+			Strict: true,
+		},
+	}
+	rt, err := New(context.Background(), Options{ProjectRoot: root, Model: mdl, OutputSchema: outputSchema})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	if _, err := rt.Run(context.Background(), Request{Prompt: "hello"}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(mdl.requests) == 0 {
+		t.Fatal("expected model request")
+	}
+	if mdl.requests[0].ResponseFormat == nil {
+		t.Fatal("expected response format on request")
+	}
+	if mdl.requests[0].ResponseFormat.JSONSchema == nil || mdl.requests[0].ResponseFormat.JSONSchema.Name != "storyboard" {
+		t.Fatalf("unexpected response format %+v", mdl.requests[0].ResponseFormat)
+	}
+}
 func TestRuntimePropagatesModelError(t *testing.T) {
 	root := newClaudeProject(t)
 	mdl := &stubModel{err: errors.New("model refused")}
