@@ -53,8 +53,8 @@ var readSchema = &tool.JSONSchema{
 
 // ReadTool streams files with strict sandbox boundaries.
 type ReadTool struct {
-	base          *fileSandbox
-	defaultLimit  int
+	base           *fileSandbox
+	defaultLimit   int
 	maxOutputBytes int
 }
 
@@ -142,15 +142,15 @@ func (r *ReadTool) Execute(ctx context.Context, params map[string]interface{}) (
 		Success: true,
 		Output:  formatted,
 		Data: map[string]interface{}{
-			"path":             displayPath(path, r.base.root),
-			"offset":           offset,
-			"limit":            limit,
-			"total_lines":      totalLines,
-			"returned_lines":   returned,
-			"line_truncations": 0,
-			"output_truncated": outputTruncated,
+			"path":              displayPath(path, r.base.root),
+			"offset":            offset,
+			"limit":             limit,
+			"total_lines":       totalLines,
+			"returned_lines":    returned,
+			"line_truncations":  0,
+			"output_truncated":  outputTruncated,
 			"output_byte_limit": r.maxOutputBytes,
-			"truncated":        truncated,
+			"truncated":         truncated,
 		},
 	}, nil
 }

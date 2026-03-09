@@ -431,7 +431,7 @@ func TestACPInprocToolCallUpdatesIncludeRawInputRawOutputAndLocations(t *testing
 			sawCompleted = true
 		}
 		if tu.RawOutput != nil {
-			if strings.Contains(fmt.Sprint(tu.RawOutput), "Output saved to:") {
+			if strings.Contains(fmt.Sprint(tu.RawOutput), "Full output:") {
 				sawRawOutputRef = true
 			}
 		}
