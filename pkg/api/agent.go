@@ -1503,7 +1503,8 @@ func registerTools(registry *tool.Registry, opts Options, settings *config.Setti
 		}
 	}
 
-	seen := make(map[string]struct{})
+	filtered := make([]tool.Tool, 0, len(tools))
+	seen := make(map[string]int)
 	for _, impl := range tools {
 		if impl == nil {
 			continue
@@ -1519,18 +1520,23 @@ func registerTools(registry *tool.Registry, opts Options, settings *config.Setti
 				continue
 			}
 		}
-		if _, ok := seen[canon]; ok {
-			log.Printf("tool %s skipped: duplicate name", name)
+		if idx, ok := seen[canon]; ok {
+			log.Printf("tool %s overrides previous duplicate", name)
+			filtered[idx] = impl
 			continue
 		}
-		seen[canon] = struct{}{}
+		seen[canon] = len(filtered)
+		filtered = append(filtered, impl)
+	}
+
+	for _, impl := range filtered {
 		if err := registry.Register(impl); err != nil {
 			return nil, fmt.Errorf("api: register tool %s: %w", impl.Name(), err)
 		}
 	}
 
 	if taskTool == nil {
-		taskTool = locateTaskTool(tools)
+		taskTool = locateTaskTool(filtered)
 	}
 	return taskTool, nil
 }

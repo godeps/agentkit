@@ -136,7 +136,7 @@ func TestSessionCoverageHarness(t *testing.T) {
 		{"TestRegisterToolsIgnoresUnknownWhitelistEntries", TestRegisterToolsIgnoresUnknownWhitelistEntries},
 		{"TestRegisterToolsLegacyToolsOverride", TestRegisterToolsLegacyToolsOverride},
 		{"TestRegisterToolsRespectsEnabledWhitelist", TestRegisterToolsRespectsEnabledWhitelist},
-		{"TestRegisterToolsSkipsDuplicateNames", TestRegisterToolsSkipsDuplicateNames},
+		{"TestRegisterToolsCustomOverridesBuiltinDuplicates", TestRegisterToolsCustomOverridesBuiltinDuplicates},
 		{"TestRegisterToolsSkipsNilEntries", TestRegisterToolsSkipsNilEntries},
 		{"TestRegisterToolsTaskNotAddedForCI", TestRegisterToolsTaskNotAddedForCI},
 		{"TestRegisterToolsUsesDefaultImplementations", TestRegisterToolsUsesDefaultImplementations},

@@ -265,7 +265,7 @@ func TestRegisterToolsDisablesAllBuiltinsWhenEmptyWhitelist(t *testing.T) {
 	}
 }
 
-func TestRegisterToolsSkipsDuplicateNames(t *testing.T) {
+func TestRegisterToolsCustomOverridesBuiltinDuplicates(t *testing.T) {
 	registry := tool.NewRegistry()
 	root := t.TempDir()
 	dup := &namedTool{name: "Bash"}
@@ -281,6 +281,15 @@ func TestRegisterToolsSkipsDuplicateNames(t *testing.T) {
 	if seen["bash"] != 1 {
 		t.Fatalf("expected bash registered once, got %d", seen["bash"])
 	}
+	for _, impl := range tools {
+		if strings.EqualFold(impl.Name(), "bash") {
+			if got, ok := impl.(*namedTool); !ok || got != dup {
+				t.Fatalf("expected custom tool to override builtin, got %#v", impl)
+			}
+			return
+		}
+	}
+	t.Fatal("expected bash tool to be registered")
 }
 
 func TestRegisterToolsWhitelistCaseInsensitive(t *testing.T) {
