@@ -289,6 +289,14 @@ func (m *openaiModel) buildParams(req Request) (openai.ChatCompletionNewParams, 
 		params.Tools = tools
 	}
 
+	if req.ResponseFormat != nil {
+		responseFormat, err := buildChatCompletionResponseFormat(req.ResponseFormat)
+		if err != nil {
+			return params, err
+		}
+		params.ResponseFormat = responseFormat
+	}
+
 	if m.temperature != nil {
 		params.Temperature = openai.Float(*m.temperature)
 	}
@@ -301,6 +309,55 @@ func (m *openaiModel) buildParams(req Request) (openai.ChatCompletionNewParams, 
 	}
 
 	return params, nil
+}
+
+func buildChatCompletionResponseFormat(format *ResponseFormat) (openai.ChatCompletionNewParamsResponseFormatUnion, error) {
+	if format == nil {
+		return openai.ChatCompletionNewParamsResponseFormatUnion{}, nil
+	}
+
+	switch strings.TrimSpace(format.Type) {
+	case "", "text":
+		return openai.ChatCompletionNewParamsResponseFormatUnion{}, nil
+	case "json_object":
+		obj := shared.NewResponseFormatJSONObjectParam()
+		return openai.ChatCompletionNewParamsResponseFormatUnion{OfJSONObject: &obj}, nil
+	case "json_schema":
+		schema, err := validateResponseFormatJSONSchema(format.JSONSchema)
+		if err != nil {
+			return openai.ChatCompletionNewParamsResponseFormatUnion{}, err
+		}
+		return openai.ChatCompletionNewParamsResponseFormatUnion{
+			OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+				JSONSchema: *schema,
+			},
+		}, nil
+	default:
+		return openai.ChatCompletionNewParamsResponseFormatUnion{}, nil
+	}
+}
+
+func validateResponseFormatJSONSchema(schema *OutputJSONSchema) (*shared.ResponseFormatJSONSchemaJSONSchemaParam, error) {
+	if schema == nil {
+		return nil, errors.New("response format json_schema schema is required")
+	}
+	name := strings.TrimSpace(schema.Name)
+	if name == "" {
+		return nil, errors.New("response format json_schema name is required")
+	}
+	if schema.Schema == nil {
+		return nil, errors.New("response format json_schema schema body is required")
+	}
+
+	out := &shared.ResponseFormatJSONSchemaJSONSchemaParam{
+		Name:   name,
+		Schema: schema.Schema,
+	}
+	if desc := strings.TrimSpace(schema.Description); desc != "" {
+		out.Description = openai.String(desc)
+	}
+	out.Strict = openai.Bool(schema.Strict)
+	return out, nil
 }
 
 func (m *openaiModel) doWithRetry(ctx context.Context, fn func(context.Context) error) error {

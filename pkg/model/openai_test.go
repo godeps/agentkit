@@ -239,6 +239,60 @@ func TestOpenAIModel_Complete(t *testing.T) {
 	}
 }
 
+func TestOpenAIModelBuildParamsResponseFormatJSONObject(t *testing.T) {
+	mdl := &openaiModel{model: "gpt-4o", maxTokens: 1024}
+	params, err := mdl.buildParams(Request{
+		Messages: []Message{{Role: "user", Content: "hello"}},
+		ResponseFormat: &ResponseFormat{
+			Type: "json_object",
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, params.ResponseFormat.OfJSONObject)
+	assert.Nil(t, params.ResponseFormat.OfJSONSchema)
+}
+
+func TestOpenAIModelBuildParamsResponseFormatJSONSchema(t *testing.T) {
+	mdl := &openaiModel{model: "gpt-4o", maxTokens: 1024}
+	params, err := mdl.buildParams(Request{
+		Messages: []Message{{Role: "user", Content: "hello"}},
+		ResponseFormat: &ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &OutputJSONSchema{
+				Name:        "storyboard",
+				Description: "Storyboard output",
+				Schema: map[string]any{
+					"type": "array",
+				},
+				Strict: true,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, params.ResponseFormat.OfJSONSchema)
+	assert.Nil(t, params.ResponseFormat.OfJSONObject)
+	assert.Equal(t, "storyboard", params.ResponseFormat.OfJSONSchema.JSONSchema.Name)
+	assert.Equal(t, "Storyboard output", params.ResponseFormat.OfJSONSchema.JSONSchema.Description.Value)
+	assert.Equal(t, true, params.ResponseFormat.OfJSONSchema.JSONSchema.Strict.Value)
+}
+
+func TestOpenAIModelBuildParamsResponseFormatJSONSchemaRequiresName(t *testing.T) {
+	mdl := &openaiModel{model: "gpt-4o", maxTokens: 1024}
+	_, err := mdl.buildParams(Request{
+		Messages: []Message{{Role: "user", Content: "hello"}},
+		ResponseFormat: &ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &OutputJSONSchema{
+				Schema: map[string]any{
+					"type": "array",
+				},
+			},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "response format json_schema name is required")
+}
+
 func TestConvertMessagesToOpenAI(t *testing.T) {
 	tests := []struct {
 		name     string
