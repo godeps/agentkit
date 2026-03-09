@@ -72,6 +72,20 @@ type ToolDefinition struct {
 	Parameters  map[string]any
 }
 
+// ResponseFormat controls the output format requested from the model.
+type ResponseFormat struct {
+	Type       string
+	JSONSchema *OutputJSONSchema
+}
+
+// OutputJSONSchema describes a structured JSON output contract.
+type OutputJSONSchema struct {
+	Name        string
+	Description string
+	Schema      map[string]any
+	Strict      bool
+}
+
 // Request drives a single model completion.
 type Request struct {
 	Messages          []Message
@@ -82,6 +96,7 @@ type Request struct {
 	MaxTokens         int
 	Temperature       *float64
 	EnablePromptCache bool // Enable prompt caching for system and recent messages
+	ResponseFormat    *ResponseFormat
 }
 
 // Usage reports token accounting for a completion.

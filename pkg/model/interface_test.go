@@ -54,3 +54,35 @@ func TestMessage_TextContent(t *testing.T) {
 		})
 	}
 }
+
+func TestRequestStructuredOutputTypes(t *testing.T) {
+	req := Request{
+		ResponseFormat: &ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &OutputJSONSchema{
+				Name:        "storyboard",
+				Description: "Storyboard output",
+				Schema: map[string]any{
+					"type": "array",
+				},
+				Strict: true,
+			},
+		},
+	}
+
+	if req.ResponseFormat == nil {
+		t.Fatalf("expected response format")
+	}
+	if req.ResponseFormat.Type != "json_schema" {
+		t.Fatalf("unexpected response format type %q", req.ResponseFormat.Type)
+	}
+	if req.ResponseFormat.JSONSchema == nil {
+		t.Fatalf("expected json schema")
+	}
+	if req.ResponseFormat.JSONSchema.Name != "storyboard" {
+		t.Fatalf("unexpected schema name %q", req.ResponseFormat.JSONSchema.Name)
+	}
+	if !req.ResponseFormat.JSONSchema.Strict {
+		t.Fatalf("expected strict schema")
+	}
+}
