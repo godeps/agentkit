@@ -15,7 +15,7 @@ import (
 
 const (
 	readDefaultLineLimit = 2000
-	readMaxLineLength    = 2000
+	readMaxOutputBytes   = 128 * 1024
 	readDescription      = `Reads a text file from the local filesystem within the configured sandbox.
 If the User provides a path, assume that path is valid. It is okay to read a file that does not exist; an error will be returned.
 
@@ -23,7 +23,7 @@ Usage:
 - The file_path parameter can be absolute or relative to the sandbox root
 - By default, it reads up to 2000 lines starting from the beginning of the file
 - You can optionally specify a line offset and limit (especially handy for long files), but it's recommended to read the whole file by not providing these parameters
-- Any lines longer than 2000 characters will be truncated
+- Output may be truncated if the formatted response grows too large; use offset/limit to continue reading
 - Results are returned using cat -n format, with line numbers starting at 1
 - This tool reads text files only; it does not decode images, PDFs, or Jupyter notebooks.
 - If the target looks like a binary file, an error will be returned instead of garbage output.
@@ -55,7 +55,7 @@ var readSchema = &tool.JSONSchema{
 type ReadTool struct {
 	base          *fileSandbox
 	defaultLimit  int
-	maxLineLength int
+	maxOutputBytes int
 }
 
 // NewReadTool builds a ReadTool rooted at the current directory.
@@ -66,18 +66,18 @@ func NewReadTool() *ReadTool {
 // NewReadToolWithRoot builds a ReadTool rooted at the provided directory.
 func NewReadToolWithRoot(root string) *ReadTool {
 	return &ReadTool{
-		base:          newFileSandbox(root),
-		defaultLimit:  readDefaultLineLimit,
-		maxLineLength: readMaxLineLength,
+		base:           newFileSandbox(root),
+		defaultLimit:   readDefaultLineLimit,
+		maxOutputBytes: readMaxOutputBytes,
 	}
 }
 
 // NewReadToolWithSandbox builds a ReadTool using a custom sandbox.
 func NewReadToolWithSandbox(root string, sandbox *security.Sandbox) *ReadTool {
 	return &ReadTool{
-		base:          newFileSandboxWithSandbox(root, sandbox),
-		defaultLimit:  readDefaultLineLimit,
-		maxLineLength: readMaxLineLength,
+		base:           newFileSandboxWithSandbox(root, sandbox),
+		defaultLimit:   readDefaultLineLimit,
+		maxOutputBytes: readMaxOutputBytes,
 	}
 }
 
@@ -117,7 +117,7 @@ func (r *ReadTool) Execute(ctx context.Context, params map[string]interface{}) (
 
 	lines := splitFileLines(content)
 	totalLines := len(lines)
-	formatted, returned, truncatedLineCount, truncated := r.formatLines(lines, offset, limit)
+	formatted, returned, outputTruncated, truncated := r.formatLines(lines, offset, limit)
 	if returned == 0 {
 		message := fmt.Sprintf("no content in requested range (file has %d lines)", totalLines)
 		return &tool.ToolResult{
@@ -129,7 +129,9 @@ func (r *ReadTool) Execute(ctx context.Context, params map[string]interface{}) (
 				"limit":             limit,
 				"total_lines":       totalLines,
 				"returned_lines":    returned,
-				"line_truncations":  truncatedLineCount,
+				"line_truncations":  0,
+				"output_truncated":  false,
+				"output_byte_limit": r.maxOutputBytes,
 				"truncated":         true,
 				"range_out_of_file": true,
 			},
@@ -145,7 +147,9 @@ func (r *ReadTool) Execute(ctx context.Context, params map[string]interface{}) (
 			"limit":            limit,
 			"total_lines":      totalLines,
 			"returned_lines":   returned,
-			"line_truncations": truncatedLineCount,
+			"line_truncations": 0,
+			"output_truncated": outputTruncated,
+			"output_byte_limit": r.maxOutputBytes,
 			"truncated":        truncated,
 		},
 	}, nil
@@ -189,16 +193,16 @@ func (r *ReadTool) parseLimit(params map[string]interface{}) (int, error) {
 	}
 }
 
-func (r *ReadTool) formatLines(lines []string, offset, limit int) (string, int, int, bool) {
+func (r *ReadTool) formatLines(lines []string, offset, limit int) (string, int, bool, bool) {
 	if len(lines) == 0 {
-		return "", 0, 0, false
+		return "", 0, false, false
 	}
 	start := offset - 1
 	if start < 0 {
 		start = 0
 	}
 	if start >= len(lines) {
-		return "", 0, 0, false
+		return "", 0, false, false
 	}
 	if limit <= 0 || limit > len(lines)-start {
 		limit = len(lines) - start
@@ -206,35 +210,30 @@ func (r *ReadTool) formatLines(lines []string, offset, limit int) (string, int, 
 
 	var b strings.Builder
 	returned := 0
-	truncatedLines := 0
 	truncated := start > 0 || start+limit < len(lines)
+	outputTruncated := false
 
 	for i := start; i < start+limit; i++ {
 		lineNumber := i + 1
-		formatted, lineTruncated := r.applyLineTruncation(strings.TrimRight(lines[i], "\r"))
-		if lineTruncated {
-			truncatedLines++
-			truncated = true
-		}
-		fmt.Fprintf(&b, "%6d\t%s", lineNumber, formatted)
-		returned++
+		line := strings.TrimRight(lines[i], "\r")
+		entry := fmt.Sprintf("%6d\t%s", lineNumber, line)
 		if i < start+limit-1 {
-			b.WriteByte('\n')
+			entry += "\n"
 		}
+		if r.maxOutputBytes > 0 && b.Len()+len(entry) > r.maxOutputBytes {
+			outputTruncated = true
+			truncated = true
+			remaining := r.maxOutputBytes - b.Len()
+			if remaining > 0 {
+				b.WriteString(entry[:remaining])
+			}
+			b.WriteString(fmt.Sprintf("\n[Output truncated at %d bytes. Use offset/limit to read more.]", r.maxOutputBytes))
+			break
+		}
+		b.WriteString(entry)
+		returned++
 	}
-	return b.String(), returned, truncatedLines, truncated
-}
-
-func (r *ReadTool) applyLineTruncation(line string) (string, bool) {
-	if r.maxLineLength <= 0 || len(line) <= r.maxLineLength {
-		return line, false
-	}
-	suffix := " ...(truncated)"
-	cutoff := r.maxLineLength - len(suffix)
-	if cutoff < 0 {
-		cutoff = 0
-	}
-	return line[:cutoff] + suffix, true
+	return b.String(), returned, outputTruncated, truncated
 }
 
 func splitFileLines(content string) []string {

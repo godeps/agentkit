@@ -47,7 +47,7 @@ func TestReadToolOffsetLimitAndTruncation(t *testing.T) {
 	skipIfWindows(t)
 	dir := cleanTempDir(t)
 	path := filepath.Join(dir, "long.txt")
-	lines := []string{"one", "two", "three", strings.Repeat("x", readMaxLineLength+10)}
+	lines := []string{"one", "two", "three", strings.Repeat("x", 2010)}
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
@@ -68,15 +68,18 @@ func TestReadToolOffsetLimitAndTruncation(t *testing.T) {
 	if strings.Contains(res.Output, "one") || strings.Contains(res.Output, "two") || !strings.Contains(res.Output, "three") {
 		t.Fatalf("unexpected output subset: %q", res.Output)
 	}
-	if !strings.Contains(res.Output, "...(truncated)") {
-		t.Fatalf("expected truncation suffix: %q", res.Output)
+	if strings.Contains(res.Output, "...(truncated)") {
+		t.Fatalf("did not expect per-line truncation suffix: %q", res.Output)
+	}
+	if !strings.Contains(res.Output, lines[3]) {
+		t.Fatalf("expected the full long line in output")
 	}
 	data := res.Data.(map[string]any)
 	if !data["truncated"].(bool) {
 		t.Fatalf("expected truncated flag for limited read")
 	}
-	if data["line_truncations"].(int) == 0 {
-		t.Fatalf("expected at least one truncated line")
+	if data["line_truncations"].(int) != 0 {
+		t.Fatalf("did not expect line truncations, got %v", data["line_truncations"])
 	}
 }
 
@@ -246,12 +249,15 @@ func TestReadToolMetadataAndHelpers(t *testing.T) {
 		t.Fatalf("expected zero for nil value, got %d err %v", val, err)
 	}
 
-	tool.maxLineLength = 0
-	if got, truncated := tool.applyLineTruncation("short"); got != "short" || truncated {
-		t.Fatalf("expected passthrough for zero max length")
+	tool.maxOutputBytes = 10
+	got, returned, outputTruncated, truncated := tool.formatLines([]string{"alpha", "beta"}, 1, 2)
+	if !outputTruncated || !truncated {
+		t.Fatalf("expected output truncation, got outputTruncated=%v truncated=%v", outputTruncated, truncated)
 	}
-	tool.maxLineLength = 5
-	if got, truncated := tool.applyLineTruncation("0123456789"); !truncated || !strings.Contains(got, "...(truncated)") {
-		t.Fatalf("expected truncation suffix, got %q truncated=%v", got, truncated)
+	if returned != 0 {
+		t.Fatalf("expected no fully returned lines once output budget is exhausted immediately, got %d", returned)
+	}
+	if !strings.Contains(got, "Output truncated at 10 bytes") {
+		t.Fatalf("expected truncation notice, got %q", got)
 	}
 }
