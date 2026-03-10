@@ -1194,8 +1194,8 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 		}
 	}
 
-	// Helper to append tool result to history
-	appendToolResult := func(content string) {
+	// Helper to append tool result to history.
+	appendToolResult := func(content string, blocks []model.ContentBlock) {
 		if t.history != nil {
 			t.history.Append(message.Message{
 				Role: "tool",
@@ -1205,6 +1205,13 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 					Result: content,
 				}},
 			})
+			if len(blocks) > 0 {
+				t.history.Append(message.Message{
+					Role:          "user",
+					Content:       fmt.Sprintf("[multimodal content from tool: %s]", call.Name),
+					ContentBlocks: convertAPIContentBlocks(blocks),
+				})
+			}
 		}
 	}
 
@@ -1241,7 +1248,7 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 	if preErr != nil {
 		// Hook denied execution - still need to add tool_result to history
 		errContent := fmt.Sprintf(`{"error":%q}`, preErr.Error())
-		appendToolResult(errContent)
+		appendToolResult(errContent, nil)
 		return agent.ToolResult{Name: call.Name, Output: errContent, Metadata: map[string]any{"error": preErr.Error()}}, preErr
 	}
 	if params != nil {
@@ -1279,6 +1286,7 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 	toolResult := agent.ToolResult{Name: call.Name}
 	meta := map[string]any{}
 	content := ""
+	var blocks []model.ContentBlock
 	if result != nil && result.Result != nil {
 		toolResult.Output = result.Result.Output
 		meta["data"] = result.Result.Data
@@ -1286,6 +1294,10 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 			meta["output_ref"] = result.Result.OutputRef
 		}
 		content = result.Result.Output
+		if len(result.Result.ContentBlocks) > 0 {
+			blocks = append([]model.ContentBlock(nil), result.Result.ContentBlocks...)
+			meta["content_blocks"] = blocks
+		}
 	}
 	if err != nil {
 		meta["error"] = err.Error()
@@ -1297,11 +1309,11 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 
 	if hookErr := t.hooks.PostToolUse(ctx, coreToolResultPayload(call, result, err)); hookErr != nil && err == nil {
 		// Hook failed - still need to add tool_result to history
-		appendToolResult(content)
+		appendToolResult(content, blocks)
 		return toolResult, hookErr
 	}
 
-	appendToolResult(content)
+	appendToolResult(content, blocks)
 	return toolResult, err
 }
 
@@ -1637,6 +1649,12 @@ func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, s
 
 	factories["bash"] = bashCtor
 	factories["file_read"] = readCtor
+	factories["image_read"] = func() tool.Tool {
+		if sandboxDisabled {
+			return toolbuiltin.NewImageReadToolWithSandbox(root, security.NewDisabledSandbox())
+		}
+		return toolbuiltin.NewImageReadToolWithRoot(root)
+	}
 	factories["file_write"] = writeCtor
 	factories["file_edit"] = editCtor
 	factories["grep"] = grepCtor
@@ -1682,6 +1700,7 @@ func builtinOrder(entry EntryPoint) []string {
 	order := []string{
 		"bash",
 		"file_read",
+		"image_read",
 		"file_write",
 		"file_edit",
 		"web_fetch",

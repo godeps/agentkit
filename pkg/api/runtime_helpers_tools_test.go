@@ -12,7 +12,7 @@ func TestEnabledBuiltinToolKeys(t *testing.T) {
 	t.Parallel()
 
 	defaults := EnabledBuiltinToolKeys(Options{})
-	for _, want := range []string{"bash", "file_read", "file_write"} {
+	for _, want := range []string{"bash", "file_read", "file_write", "image_read"} {
 		if !slices.Contains(defaults, want) {
 			t.Fatalf("default builtins missing %q in %v", want, defaults)
 		}

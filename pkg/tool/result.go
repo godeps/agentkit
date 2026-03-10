@@ -1,5 +1,7 @@
 package tool
 
+import "github.com/godeps/agentkit/pkg/model"
+
 // OutputRef describes where tool output has been persisted when it is too large
 // (or otherwise undesirable) to embed directly in ToolResult.Output.
 type OutputRef struct {
@@ -10,9 +12,10 @@ type OutputRef struct {
 
 // ToolResult captures the outcome of a tool invocation.
 type ToolResult struct {
-	Success   bool
-	Output    string
-	OutputRef *OutputRef
-	Data      interface{}
-	Error     error
+	Success       bool
+	Output        string
+	OutputRef     *OutputRef
+	ContentBlocks []model.ContentBlock
+	Data          interface{}
+	Error         error
 }

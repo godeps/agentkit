@@ -1,6 +1,6 @@
 中文 | [English](README.md)
 
-# agentsdk-go 示例
+# agentkit 示例
 
 十二个示例，均可在仓库根目录运行。
 

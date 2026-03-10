@@ -29,7 +29,7 @@ Example: 10 concurrent requests with unique session IDs will execute in parallel
 ## Request Body
 ```json
 {
-  "prompt": "Summarize agentsdk-go in one sentence",
+  "prompt": "Summarize agentkit in one sentence",
   "session_id": "demo-123",          // optional; auto-generated when missing
   "timeout_ms": 3600000              // optional; default 3600000ms (60 minutes)
 }

@@ -204,7 +204,7 @@ type Options struct {
 	// - empty slice: disable all built-in tools
 	// - non-empty: enable only the listed built-ins (case-insensitive).
 	// If Tools is non-empty, this whitelist is ignored in favour of the legacy Tools override.
-	// Available built-in names include: bash, file_read, file_write, grep, glob.
+	// Available built-in names include: bash, file_read, image_read, file_write, grep, glob.
 	EnabledBuiltinTools []string
 
 	// DisallowedTools is a blacklist of tool names (case-insensitive) that will not be registered.

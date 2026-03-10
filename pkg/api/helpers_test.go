@@ -211,7 +211,7 @@ func TestRegisterToolsUsesDefaultImplementations(t *testing.T) {
 		t.Fatal("expected task tool to be registered")
 	}
 	tools := registry.List()
-	expected := []string{"Bash", "Read", "Write", "Edit", "WebFetch", "WebSearch", "BashOutput", "BashStatus", "KillTask", "TaskCreate", "TaskList", "TaskGet", "TaskUpdate", "AskUserQuestion", "Skill", "SlashCommand", "Grep", "Glob", "Task"}
+	expected := []string{"Bash", "Read", "ImageRead", "Write", "Edit", "WebFetch", "WebSearch", "BashOutput", "BashStatus", "KillTask", "TaskCreate", "TaskList", "TaskGet", "TaskUpdate", "AskUserQuestion", "Skill", "SlashCommand", "Grep", "Glob", "Task"}
 	if len(tools) != len(expected) {
 		t.Fatalf("expected %d default tools, got %d", len(expected), len(tools))
 	}
@@ -294,7 +294,7 @@ func TestRegisterToolsCustomOverridesBuiltinDuplicates(t *testing.T) {
 
 func TestRegisterToolsWhitelistCaseInsensitive(t *testing.T) {
 	registry := tool.NewRegistry()
-	opts := Options{ProjectRoot: t.TempDir(), EnabledBuiltinTools: []string{"BASH", "GrEp", "FILE_READ"}}
+	opts := Options{ProjectRoot: t.TempDir(), EnabledBuiltinTools: []string{"BASH", "GrEp", "FILE_READ", "IMAGE_READ"}}
 	if _, err := registerTools(registry, opts, nil, nil, nil); err != nil {
 		t.Fatalf("register tools: %v", err)
 	}
@@ -302,13 +302,13 @@ func TestRegisterToolsWhitelistCaseInsensitive(t *testing.T) {
 	for _, impl := range registry.List() {
 		seen[strings.ToLower(impl.Name())] = struct{}{}
 	}
-	for _, want := range []string{"bash", "grep", "read"} {
+	for _, want := range []string{"bash", "grep", "read", "imageread"} {
 		if _, ok := seen[want]; !ok {
 			t.Fatalf("missing tool %s", want)
 		}
 	}
-	if len(seen) != 3 {
-		t.Fatalf("expected 3 tools, got %d", len(seen))
+	if len(seen) != 4 {
+		t.Fatalf("expected 4 tools, got %d", len(seen))
 	}
 }
 
@@ -390,8 +390,8 @@ func TestRegisterToolsTaskNotAddedForCI(t *testing.T) {
 	if _, ok := seen["Task"]; ok {
 		t.Fatal("Task tool should be absent in CI mode")
 	}
-	if len(seen) != 18 { // all built-ins except Task
-		t.Fatalf("expected 18 built-ins without Task, got %d", len(seen))
+	if len(seen) != 19 { // all built-ins except Task
+		t.Fatalf("expected 19 built-ins without Task, got %d", len(seen))
 	}
 }
 

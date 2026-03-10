@@ -568,6 +568,54 @@ func TestRuntimeToolExecutor_PropagatesOutputRef(t *testing.T) {
 	}
 }
 
+func TestRuntimeToolExecutor_AppendsToolContentBlocksToHistory(t *testing.T) {
+	reg := tool.NewRegistry()
+	impl := &multimodalTool{}
+	if err := reg.Register(impl); err != nil {
+		t.Fatalf("register tool: %v", err)
+	}
+	exec := tool.NewExecutor(reg, nil)
+	history := message.NewHistory()
+	rtExec := &runtimeToolExecutor{
+		executor: exec,
+		hooks:    &runtimeHookAdapter{},
+		history:  history,
+		host:     "localhost",
+	}
+
+	call := agent.ToolCall{ID: "c1", Name: impl.Name(), Input: map[string]any{}}
+	res, err := rtExec.Execute(context.Background(), call, agent.NewContext())
+	if err != nil {
+		t.Fatalf("execute tool: %v", err)
+	}
+	if res.Output != "image loaded" {
+		t.Fatalf("unexpected output: %q", res.Output)
+	}
+
+	msgs := history.All()
+	if len(msgs) != 2 {
+		t.Fatalf("expected tool message plus multimodal follow-up, got %d entries", len(msgs))
+	}
+	if msgs[0].Role != "tool" || len(msgs[0].ToolCalls) != 1 {
+		t.Fatalf("unexpected tool history entry: %+v", msgs[0])
+	}
+	if msgs[0].ToolCalls[0].Result != "image loaded" {
+		t.Fatalf("unexpected tool result in history: %+v", msgs[0].ToolCalls[0])
+	}
+	if msgs[1].Role != "user" {
+		t.Fatalf("expected multimodal follow-up as user message, got %+v", msgs[1])
+	}
+	if len(msgs[1].ContentBlocks) != 1 {
+		t.Fatalf("expected 1 content block, got %+v", msgs[1].ContentBlocks)
+	}
+	if msgs[1].ContentBlocks[0].Type != message.ContentBlockImage {
+		t.Fatalf("unexpected content block type: %+v", msgs[1].ContentBlocks[0])
+	}
+	if msgs[1].ContentBlocks[0].MediaType != "image/png" || msgs[1].ContentBlocks[0].Data != "aGVsbG8=" {
+		t.Fatalf("unexpected content block payload: %+v", msgs[1].ContentBlocks[0])
+	}
+}
+
 func TestNewRejectsDisallowedMCPServer(t *testing.T) {
 	root := newClaudeProject(t)
 	mdl := &stubModel{responses: []*model.Response{{Message: model.Message{Role: "assistant", Content: "ok"}}}}
@@ -813,4 +861,21 @@ func (f *failingTool) Description() string      { return "always fails" }
 func (f *failingTool) Schema() *tool.JSONSchema { return &tool.JSONSchema{Type: "object"} }
 func (f *failingTool) Execute(context.Context, map[string]interface{}) (*tool.ToolResult, error) {
 	return nil, f.err
+}
+
+type multimodalTool struct{}
+
+func (m *multimodalTool) Name() string             { return "image_read" }
+func (m *multimodalTool) Description() string      { return "returns image blocks" }
+func (m *multimodalTool) Schema() *tool.JSONSchema { return &tool.JSONSchema{Type: "object"} }
+func (m *multimodalTool) Execute(context.Context, map[string]interface{}) (*tool.ToolResult, error) {
+	return &tool.ToolResult{
+		Success: true,
+		Output:  "image loaded",
+		ContentBlocks: []model.ContentBlock{{
+			Type:      model.ContentBlockImage,
+			MediaType: "image/png",
+			Data:      "aGVsbG8=",
+		}},
+	}, nil
 }

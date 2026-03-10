@@ -1,12 +1,12 @@
 中文 | [English](README.md)
 
-# agentsdk-go
+# agentkit
 
-基于 Go 语言实现的 Agent SDK，实现 Claude Code 风格的核心运行时能力，并提供可选的 Middleware 拦截机制。
+基于 Go 语言实现的 Agent SDK，提供 Claude Code 风格的核心运行时能力，并提供可选的 Middleware 拦截机制。
 
 ## 概述
 
-agentsdk-go 是一个模块化的 Agent 开发框架，实现 Claude Code 风格的核心运行时能力（Hooks、MCP、Sandbox、Skills、Subagents、Commands、Tasks），并在此基础上提供可选的 6 点 Middleware 拦截机制。该 SDK 支持 CLI、CI/CD 和企业平台等多种部署场景。
+agentkit 是一个模块化的 Agent 开发框架，实现 Claude Code 风格的核心运行时能力（Hooks、MCP、Sandbox、Skills、Subagents、Commands、Tasks），并在此基础上提供可选的 6 点 Middleware 拦截机制。该 SDK 支持 CLI、CI/CD 和企业平台等多种部署场景。
 
 ### 依赖
 
@@ -364,7 +364,7 @@ defer rt.Close()
 ## 项目结构
 
 ```
-agentsdk-go/
+agentkit/
 ├── pkg/                        # 核心包
 │   ├── agent/                  # Agent 核心循环
 │   ├── middleware/             # Middleware 系统

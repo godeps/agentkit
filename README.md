@@ -1,12 +1,12 @@
 [中文](README_zh.md) | English
 
-# agentsdk-go
+# agentkit
 
-An Agent SDK implemented in Go that implements core Claude Code-style runtime capabilities, plus an optional middleware interception layer.
+An Agent SDK implemented in Go that provides core Claude Code-style runtime capabilities, plus an optional middleware interception layer.
 
 ## Overview
 
-agentsdk-go is a modular agent development framework that implements core Claude Code-style runtime capabilities (Hooks, MCP, Sandbox, Skills, Subagents, Commands, Tasks) and optionally exposes a six-point middleware interception mechanism. The SDK supports deployment scenarios across CLI, CI/CD, and enterprise platforms.
+agentkit is a modular agent development framework that implements core Claude Code-style runtime capabilities (Hooks, MCP, Sandbox, Skills, Subagents, Commands, Tasks) and optionally exposes a six-point middleware interception mechanism. The SDK supports deployment scenarios across CLI, CI/CD, and enterprise platforms.
 
 ### Dependencies
 
@@ -400,7 +400,7 @@ The repository includes progressive examples:
 ## Project Structure
 
 ```
-agentsdk-go/
+agentkit/
 ├── pkg/                        # Core packages
 │   ├── agent/                  # Agent core loop
 │   ├── middleware/             # Middleware system

@@ -1,6 +1,6 @@
 # Hooks 示例
 
-演示 agentsdk-go 的 Shell-based Hooks 功能。Hooks 在 agent 执行工具时**自动触发**，无需手动调用。
+演示 agentkit 的 Shell-based Hooks 功能。Hooks 在 agent 执行工具时**自动触发**，无需手动调用。
 
 ## 运行
 

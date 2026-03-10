@@ -1,6 +1,6 @@
 [中文](README_zh.md) | English
 
-# agentsdk-go Examples
+# agentkit Examples
 
 Twelve examples. Run everything from the repo root.
 
