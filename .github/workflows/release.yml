@@ -5,40 +5,54 @@ on:
     tags:
       - 'v*'
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
 
       - name: Generate Release Notes
         id: release_notes
         run: |
+          set -euo pipefail
+
+          TAG="${{ github.ref_name }}"
+
           # Get previous tag
-          PREVIOUS_TAG=$(git tag --sort=-version:refname | grep -v "^${{ github.ref_name }}$" | head -n 1)
+          PREVIOUS_TAG=$(git tag --sort=-version:refname | grep -Fxv "$TAG" | head -n 1 || true)
 
           if [ -z "$PREVIOUS_TAG" ]; then
             echo "No previous tag found, using all commits"
             COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
           else
-            echo "Generating notes from $PREVIOUS_TAG to ${{ github.ref_name }}"
-            COMMITS=$(git log ${PREVIOUS_TAG}..${{ github.ref_name }} --pretty=format:"- %s (%h)" --no-merges)
+            echo "Generating notes from $PREVIOUS_TAG to $TAG"
+            COMMITS=$(git log "${PREVIOUS_TAG}..${TAG}" --pretty=format:"- %s (%h)" --no-merges)
           fi
 
-          # Create release notes
-          cat > release_notes.md <<EOF
-          ## What's Changed
+          if [ -z "$COMMITS" ]; then
+            COMMITS="- No user-facing changes captured in commit subjects."
+          fi
 
-          ${COMMITS}
-
-          **Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${{ github.ref_name }}
-          EOF
+          {
+            echo "## What's Changed"
+            echo
+            echo "${COMMITS}"
+            echo
+            if [ -n "$PREVIOUS_TAG" ]; then
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${TAG}"
+            fi
+          } > release_notes.md
 
           cat release_notes.md
 
@@ -46,6 +60,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create ${{ github.ref_name }} \
-            --title "${{ github.ref_name }}" \
-            --notes-file release_notes.md
+          set -euo pipefail
+
+          TAG="${{ github.ref_name }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --title "$TAG" \
+              --notes-file release_notes.md
+          else
+            gh release create "$TAG" \
+              --verify-tag \
+              --title "$TAG" \
+              --notes-file release_notes.md
+          fi
