@@ -41,3 +41,4 @@ tools.json
 .swe-agent
 .trace
 trace-out/
+other/
