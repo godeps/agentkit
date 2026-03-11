@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -9,6 +10,35 @@ import (
 
 	"github.com/godeps/agentkit/pkg/api"
 )
+
+type fakeRuntime struct {
+	runFn       func(context.Context, api.Request) (*api.Response, error)
+	runStreamFn func(context.Context, api.Request) (<-chan api.StreamEvent, error)
+	closeFn     func() error
+}
+
+func (f *fakeRuntime) Run(ctx context.Context, req api.Request) (*api.Response, error) {
+	if f.runFn != nil {
+		return f.runFn(ctx, req)
+	}
+	return &api.Response{Result: &api.Result{Output: "ok"}}, nil
+}
+
+func (f *fakeRuntime) RunStream(ctx context.Context, req api.Request) (<-chan api.StreamEvent, error) {
+	if f.runStreamFn != nil {
+		return f.runStreamFn(ctx, req)
+	}
+	ch := make(chan api.StreamEvent)
+	close(ch)
+	return ch, nil
+}
+
+func (f *fakeRuntime) Close() error {
+	if f.closeFn != nil {
+		return f.closeFn()
+	}
+	return nil
+}
 
 func TestRunACPModeNoPrompt(t *testing.T) {
 	originalServe := serveACPStdio
@@ -49,5 +79,79 @@ func TestRunNonACPModeWithoutPromptErrors(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "prompt") {
 		t.Fatalf("expected prompt-related error, got: %v", err)
+	}
+}
+
+func TestRunPrintsSharedEffectiveConfig(t *testing.T) {
+	origFactory := runtimeFactory
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+	})
+	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
+		return &fakeRuntime{
+			runFn: func(context.Context, api.Request) (*api.Response, error) {
+				return &api.Response{Mode: api.ModeContext{EntryPoint: api.EntryPointCLI}, Result: &api.Result{Output: "ok"}}, nil
+			},
+		}, nil
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := run([]string{"--prompt", "hi", "--print-effective-config"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := stderr.String(); !strings.Contains(got, "effective-config (pre-runtime)") {
+		t.Fatalf("expected shared config output, got: %s", got)
+	}
+}
+
+func TestRunStreamUsesClikitRendererWhenEnabled(t *testing.T) {
+	origFactory := runtimeFactory
+	origRunStream := clikitRunStream
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+		clikitRunStream = origRunStream
+	})
+	rt := &fakeRuntime{}
+	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
+		return rt, nil
+	}
+	called := false
+	clikitRunStream = func(ctx context.Context, out, errOut io.Writer, eng streamEngine, sessionID, prompt string, timeoutMs int, verbose bool, waterfallMode string) error {
+		called = true
+		if prompt != "hi" {
+			t.Fatalf("unexpected prompt: %q", prompt)
+		}
+		return nil
+	}
+
+	if err := run([]string{"--prompt", "hi", "--stream"}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !called {
+		t.Fatalf("expected clikit stream renderer to be called")
+	}
+}
+
+func TestCLIReplUsesSharedBannerAndCommandLoop(t *testing.T) {
+	origFactory := runtimeFactory
+	origRunREPL := clikitRunREPL
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+		clikitRunREPL = origRunREPL
+	})
+	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
+		return &fakeRuntime{}, nil
+	}
+	called := false
+	clikitRunREPL = func(ctx context.Context, in io.ReadCloser, out, errOut io.Writer, eng replEngine, timeoutMs int, verbose bool, waterfallMode string, initialSessionID string) {
+		called = true
+	}
+
+	if err := run([]string{"--repl"}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !called {
+		t.Fatalf("expected clikit repl to be called")
 	}
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,10 +15,25 @@ import (
 
 	acpserver "github.com/godeps/agentkit/pkg/acp"
 	"github.com/godeps/agentkit/pkg/api"
+	"github.com/godeps/agentkit/pkg/clikit"
 	modelpkg "github.com/godeps/agentkit/pkg/model"
 )
 
 var serveACPStdio = acpserver.ServeStdio
+var runtimeFactory = func(ctx context.Context, opts api.Options) (runtimeClient, error) {
+	return api.New(ctx, opts)
+}
+var clikitRunStream = clikit.RunStream
+var clikitRunREPL = clikit.RunREPL
+
+type runtimeClient interface {
+	Run(context.Context, api.Request) (*api.Response, error)
+	RunStream(context.Context, api.Request) (<-chan api.StreamEvent, error)
+	Close() error
+}
+
+type streamEngine = clikit.StreamEngine
+type replEngine = clikit.ReplEngine
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
@@ -44,7 +58,9 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	promptFile := flags.String("prompt-file", "", "Read prompt from file (defaults to stdin/args)")
 	promptLiteral := flags.String("prompt", "", "Prompt literal (overrides stdin)")
 	stream := flags.Bool("stream", false, "Stream events instead of waiting for completion")
+	repl := flags.Bool("repl", false, "Run interactive REPL mode")
 	verbose := flags.Bool("verbose", false, "Verbose stream diagnostics")
+	waterfall := flags.String("waterfall", clikit.WaterfallModeFull, "Waterfall output mode: off|summary|full")
 	skillsRecursive := flags.Bool("skills-recursive", true, "Discover SKILL.md recursively")
 	acpMode := flags.Bool("acp", false, "Run ACP server over stdio")
 
@@ -90,11 +106,41 @@ func run(argv []string, stdout, stderr io.Writer) error {
 			return &v
 		}(),
 	}
-	if *printConfig {
-		printEffectiveConfig(stderr, options, *timeoutMs)
-	}
 	if *acpMode {
 		return serveACPStdio(context.Background(), options, os.Stdin, stdout)
+	}
+	recorder := clikitTurnRecorder()
+	options.Middleware = append(options.Middleware, clikit.TurnRecorderMiddleware(recorder))
+	if *printConfig {
+		clikit.PrintEffectiveConfig(stderr, options.ProjectRoot, clikit.EffectiveConfig{
+			ModelName:       *modelName,
+			ConfigRoot:      finalConfigRoot,
+			SkillsDirs:      append([]string(nil), skillsDirs...),
+			SkillsRecursive: options.SkillsRecursive,
+		}, *timeoutMs)
+	}
+
+	runtime, err := runtimeFactory(context.Background(), options)
+	if err != nil {
+		return fmt.Errorf("create runtime: %w", err)
+	}
+	defer runtime.Close()
+	adapter := clikit.NewRuntimeAdapter(runtime, clikit.RuntimeAdapterConfig{
+		ProjectRoot:     options.ProjectRoot,
+		ConfigRoot:      finalConfigRoot,
+		ModelName:       *modelName,
+		SkillsDirs:      append([]string(nil), skillsDirs...),
+		SkillsRecursive: options.SkillsRecursive,
+		TurnRecorder:    recorder,
+	})
+	if *printConfig {
+		clikit.PrintRuntimeEffectiveConfig(stderr, adapter, *timeoutMs)
+	}
+
+	if *repl {
+		clikit.PrintBanner(stdout, adapter.ModelName(), adapter.Skills())
+		clikitRunREPL(context.Background(), os.Stdin, stdout, stderr, adapter, *timeoutMs, *verbose, *waterfall, strings.TrimSpace(*sessionID))
+		return nil
 	}
 
 	prompt, err := resolvePrompt(*promptLiteral, *promptFile, flags.Args())
@@ -104,12 +150,6 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	if strings.TrimSpace(prompt) == "" {
 		return errors.New("prompt is empty")
 	}
-
-	runtime, err := api.New(context.Background(), options)
-	if err != nil {
-		return fmt.Errorf("create runtime: %w", err)
-	}
-	defer runtime.Close()
 
 	ctx := context.Background()
 	cancel := func() {}
@@ -134,7 +174,7 @@ func run(argv []string, stdout, stderr io.Writer) error {
 		Tags: parseTags(tagFlags),
 	}
 	if *stream {
-		return streamRun(ctx, runtime, req, stdout, stderr, *verbose)
+		return clikitRunStream(ctx, stdout, stderr, adapter, req.SessionID, req.Prompt, *timeoutMs, *verbose, *waterfall)
 	}
 	resp, err := runtime.Run(ctx, req)
 	if err != nil {
@@ -175,26 +215,6 @@ func resolvePrompt(literal, file string, tail []string) (string, error) {
 		return "", err
 	}
 	return strings.Join(lines, "\n"), nil
-}
-
-func streamRun(ctx context.Context, rt *api.Runtime, req api.Request, out, errOut io.Writer, verbose bool) error {
-	ch, err := rt.RunStream(ctx, req)
-	if err != nil {
-		return err
-	}
-	encoder := json.NewEncoder(out)
-	for evt := range ch {
-		if verbose && errOut != nil {
-			switch evt.Type {
-			case api.EventToolExecutionResult, api.EventMessageStop, api.EventError:
-				_, _ = fmt.Fprintf(errOut, "[event] %s\n", evt.Type)
-			}
-		}
-		if err := encoder.Encode(evt); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func printResponse(resp *api.Response, out io.Writer) {
@@ -239,21 +259,6 @@ func parseTags(values multiValue) map[string]string {
 	return tags
 }
 
-func printEffectiveConfig(out io.Writer, opts api.Options, timeoutMs int) {
-	if out == nil {
-		return
-	}
-	_, _ = fmt.Fprintf(out, "effective-config\n")
-	_, _ = fmt.Fprintf(out, "  project_root: %s\n", opts.ProjectRoot)
-	_, _ = fmt.Fprintf(out, "  config_root: %s\n", opts.ConfigRoot)
-	_, _ = fmt.Fprintf(out, "  timeout_ms: %d\n", timeoutMs)
-	_, _ = fmt.Fprintf(out, "  skills_recursive: %v\n", opts.SkillsRecursive != nil && *opts.SkillsRecursive)
-	if len(opts.SkillsDirs) == 0 {
-		_, _ = fmt.Fprintf(out, "  skills_dirs: (default)\n")
-		return
-	}
-	_, _ = fmt.Fprintf(out, "  skills_dirs:\n")
-	for _, d := range opts.SkillsDirs {
-		_, _ = fmt.Fprintf(out, "    - %s\n", d)
-	}
+func clikitTurnRecorder() *clikit.TurnRecorder {
+	return clikit.NewTurnRecorder()
 }
