@@ -125,11 +125,36 @@ func TestRunStreamUsesClikitRendererWhenEnabled(t *testing.T) {
 		return nil
 	}
 
-	if err := run([]string{"--prompt", "hi", "--stream"}, io.Discard, io.Discard); err != nil {
+	if err := run([]string{"--prompt", "hi", "--stream", "--stream-format", "rendered"}, io.Discard, io.Discard); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if !called {
 		t.Fatalf("expected clikit stream renderer to be called")
+	}
+}
+
+func TestRunStreamJSONRemainsMachineReadableByDefault(t *testing.T) {
+	origFactory := runtimeFactory
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+	})
+	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
+		return &fakeRuntime{
+			runStreamFn: func(context.Context, api.Request) (<-chan api.StreamEvent, error) {
+				ch := make(chan api.StreamEvent, 1)
+				ch <- api.StreamEvent{Type: api.EventMessageStop}
+				close(ch)
+				return ch, nil
+			},
+		}, nil
+	}
+
+	var stdout bytes.Buffer
+	if err := run([]string{"--prompt", "hi", "--stream"}, &stdout, io.Discard); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, `"type":"message_stop"`) {
+		t.Fatalf("expected json stream output, got: %s", got)
 	}
 }
 

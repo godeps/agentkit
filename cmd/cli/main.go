@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -58,6 +59,7 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	promptFile := flags.String("prompt-file", "", "Read prompt from file (defaults to stdin/args)")
 	promptLiteral := flags.String("prompt", "", "Prompt literal (overrides stdin)")
 	stream := flags.Bool("stream", false, "Stream events instead of waiting for completion")
+	streamFormat := flags.String("stream-format", "json", "Streaming output format: json|rendered")
 	repl := flags.Bool("repl", false, "Run interactive REPL mode")
 	verbose := flags.Bool("verbose", false, "Verbose stream diagnostics")
 	waterfall := flags.String("waterfall", clikit.WaterfallModeFull, "Waterfall output mode: off|summary|full")
@@ -174,7 +176,14 @@ func run(argv []string, stdout, stderr io.Writer) error {
 		Tags: parseTags(tagFlags),
 	}
 	if *stream {
-		return clikitRunStream(ctx, stdout, stderr, adapter, req.SessionID, req.Prompt, *timeoutMs, *verbose, *waterfall)
+		switch strings.ToLower(strings.TrimSpace(*streamFormat)) {
+		case "", "json":
+			return streamRunJSON(ctx, runtime, req, stdout, stderr, *verbose)
+		case "rendered", "human", "pretty":
+			return clikitRunStream(ctx, stdout, stderr, adapter, req.SessionID, req.Prompt, *timeoutMs, *verbose, *waterfall)
+		default:
+			return fmt.Errorf("unsupported stream format %q", *streamFormat)
+		}
 	}
 	resp, err := runtime.Run(ctx, req)
 	if err != nil {
@@ -226,6 +235,26 @@ func printResponse(resp *api.Response, out io.Writer) {
 		fmt.Fprintf(out, "stop_reason: %s\n", resp.Result.StopReason)
 		fmt.Fprintf(out, "output:\n%s\n", resp.Result.Output)
 	}
+}
+
+func streamRunJSON(ctx context.Context, rt runtimeClient, req api.Request, out, errOut io.Writer, verbose bool) error {
+	ch, err := rt.RunStream(ctx, req)
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(out)
+	for evt := range ch {
+		if verbose && errOut != nil {
+			switch evt.Type {
+			case api.EventToolExecutionResult, api.EventMessageStop, api.EventError:
+				_, _ = fmt.Fprintf(errOut, "[event] %s\n", evt.Type)
+			}
+		}
+		if err := encoder.Encode(evt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type multiValue []string

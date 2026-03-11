@@ -23,6 +23,30 @@ agentkit 是一个模块化的 Agent 开发框架，实现 Claude Code 风格的
 - **OpenTelemetry**：分布式追踪与 span 传播
 - **UUID 追踪**：请求级别的 UUID 用于可观测性
 
+### 共享 CLI 支撑层
+
+`agentkit` 现在内置了 `pkg/clikit`，用于给下游应用复用：
+
+- 面向人的流式渲染输出与工具进度展示
+- REPL 命令处理
+- waterfall 时序摘要
+- 运行前/运行时 effective-config 打印
+
+当前仓库自带的 CLI 已经开始复用这层能力，同时保留 JSON 作为默认的机器可读流式格式。
+
+### CLI 模式
+
+```bash
+# 机器可读的 JSON 流式事件
+go run ./cmd/cli --prompt "分析仓库" --stream
+
+# 面向人的渲染流输出
+go run ./cmd/cli --prompt "分析仓库" --stream --stream-format rendered
+
+# 交互式 REPL
+go run ./cmd/cli --repl
+```
+
 ### 并发模型
 - **线程安全 Runtime**：内部对可变状态加锁。
 - **会话互斥**：相同 `SessionID` 的并发 `Run`/`RunStream` 会返回 `ErrConcurrentExecution`（需要串行化时由调用方自行排队/重试）。

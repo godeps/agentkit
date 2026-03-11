@@ -43,6 +43,30 @@ agentkit is a modular agent development framework that implements core Claude Co
 - `examples/11-reasoning` - Reasoning/thinking model support
 - `examples/12-multimodal` - Image and document input
 
+### Shared CLI Support
+
+`agentkit` now includes `pkg/clikit`, a reusable CLI support layer for downstream applications that need:
+
+- human-readable streaming output with tool progress
+- REPL command handling
+- waterfall timing summaries
+- pre-runtime and runtime effective-config printing
+
+The built-in CLI uses this layer for interactive mode and rendered streams while preserving JSON as the default machine-readable streaming format.
+
+### CLI Modes
+
+```bash
+# Machine-readable event stream (default streaming format)
+go run ./cmd/cli --prompt "inspect repo" --stream
+
+# Human-readable rendered stream
+go run ./cmd/cli --prompt "inspect repo" --stream --stream-format rendered
+
+# Interactive REPL
+go run ./cmd/cli --repl
+```
+
 ## System Architecture
 
 ### Core Layer

@@ -5,6 +5,18 @@ All notable changes to agentsdk-go will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Shared CLI support package `pkg/clikit` for reusable REPL, rendered stream output, waterfall tracing, and effective-config printing
+- `cmd/cli --repl` interactive mode backed by the shared CLI support layer
+- `cmd/cli --stream-format rendered` for human-readable streaming output
+- `api.Runtime.AvailableSkills()` and public model turn recording helpers for downstream CLI integrations
+
+### Changed
+- `cmd/cli --stream` defaults back to machine-readable JSON output for compatibility
+- Human-readable stream rendering now requires `--stream-format rendered`
+
 ## [0.5.2] - 2025-12-26
 
 ### Fixed

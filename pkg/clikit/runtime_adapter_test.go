@@ -99,7 +99,7 @@ func TestTurnRecorderMiddlewareTracksModelTurns(t *testing.T) {
 		t.Fatalf("AfterModel: %v", err)
 	}
 
-	stats := recorder.since("sess-1", 0)
+	stats := recorder.Since("sess-1", 0)
 	if len(stats) != 1 {
 		t.Fatalf("unexpected stats len: %d", len(stats))
 	}
