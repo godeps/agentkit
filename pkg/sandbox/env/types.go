@@ -71,3 +71,21 @@ type GrepMatch struct {
 	Column  int
 	Preview string
 }
+
+// GVisorOptions configures the gVisor-backed sandbox mode.
+type GVisorOptions struct {
+	Enabled                    bool
+	DefaultGuestCwd            string
+	AutoCreateSessionWorkspace bool
+	SessionWorkspaceBase       string
+	HelperModeFlag             string
+	Mounts                     []MountSpec
+}
+
+// MountSpec describes one host-to-guest filesystem exposure.
+type MountSpec struct {
+	HostPath        string
+	GuestPath       string
+	ReadOnly        bool
+	CreateIfMissing bool
+}

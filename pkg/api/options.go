@@ -23,6 +23,7 @@ import (
 	"github.com/godeps/agentkit/pkg/runtime/subagents"
 	"github.com/godeps/agentkit/pkg/runtime/tasks"
 	"github.com/godeps/agentkit/pkg/sandbox"
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
 	"github.com/godeps/agentkit/pkg/security"
 	"github.com/godeps/agentkit/pkg/tool"
 )
@@ -98,26 +99,11 @@ type SandboxOptions struct {
 	AllowedPaths  []string
 	NetworkAllow  []string
 	ResourceLimit sandbox.ResourceLimits
-	GVisor        *GVisorOptions
+	GVisor        *sandboxenv.GVisorOptions
 }
 
-// GVisorOptions configures the gVisor-backed sandbox mode.
-type GVisorOptions struct {
-	Enabled                    bool
-	DefaultGuestCwd            string
-	AutoCreateSessionWorkspace bool
-	SessionWorkspaceBase       string
-	HelperModeFlag             string
-	Mounts                     []MountSpec
-}
-
-// MountSpec describes one host-to-guest filesystem exposure.
-type MountSpec struct {
-	HostPath        string
-	GuestPath       string
-	ReadOnly        bool
-	CreateIfMissing bool
-}
+type GVisorOptions = sandboxenv.GVisorOptions
+type MountSpec = sandboxenv.MountSpec
 
 // PermissionRequest captures a permission prompt for sandbox "ask" matches.
 type PermissionRequest struct {
@@ -566,7 +552,7 @@ func freezeSandboxOptions(in SandboxOptions) SandboxOptions {
 	if in.GVisor != nil {
 		gv := *in.GVisor
 		if len(in.GVisor.Mounts) > 0 {
-			gv.Mounts = append([]MountSpec(nil), in.GVisor.Mounts...)
+			gv.Mounts = append([]sandboxenv.MountSpec(nil), in.GVisor.Mounts...)
 		}
 		out.GVisor = &gv
 	}

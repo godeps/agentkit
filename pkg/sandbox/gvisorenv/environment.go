@@ -12,21 +12,16 @@ var errGVisorNotImplemented = errors.New("sandbox gvisorenv: operation not imple
 // Environment is the gVisor-backed execution environment placeholder.
 type Environment struct {
 	projectRoot string
+	gvisor      *sandboxenv.GVisorOptions
 }
 
-func New(projectRoot string) *Environment {
-	return &Environment{projectRoot: projectRoot}
+func New(projectRoot string, opts *sandboxenv.GVisorOptions) *Environment {
+	return &Environment{projectRoot: projectRoot, gvisor: opts}
 }
 
-func (e *Environment) PrepareSession(_ context.Context, session sandboxenv.SessionContext) (*sandboxenv.PreparedSession, error) {
-	return &sandboxenv.PreparedSession{
-		SessionID:   session.SessionID,
-		GuestCwd:    "/workspace",
-		SandboxType: "gvisor",
-		Meta: map[string]any{
-			"project_root": e.projectRoot,
-		},
-	}, nil
+func (e *Environment) PrepareSession(ctx context.Context, session sandboxenv.SessionContext) (*sandboxenv.PreparedSession, error) {
+	prepared, _, _, err := prepareSession(ctx, e.projectRoot, e.gvisor, session)
+	return prepared, err
 }
 
 func (e *Environment) RunCommand(context.Context, *sandboxenv.PreparedSession, sandboxenv.CommandRequest) (*sandboxenv.CommandResult, error) {
