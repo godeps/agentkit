@@ -46,12 +46,19 @@ func TestOptionsFrozenCopiesSlices(t *testing.T) {
 		DisallowedTools:     []string{"read"},
 		Sandbox: SandboxOptions{
 			AllowedPaths: []string{"/tmp"},
+			GVisor: &GVisorOptions{
+				Mounts: []MountSpec{{HostPath: "/tmp/in", GuestPath: "/workspace/in"}},
+			},
 		},
 	}
 	frozen := opts.frozen()
 	opts.EnabledBuiltinTools[0] = "mutated"
 	if frozen.EnabledBuiltinTools[0] != "bash" {
 		t.Fatalf("expected frozen copy")
+	}
+	opts.Sandbox.GVisor.Mounts[0].GuestPath = "/mutated"
+	if frozen.Sandbox.GVisor.Mounts[0].GuestPath != "/workspace/in" {
+		t.Fatalf("expected frozen gvisor mounts copy")
 	}
 }
 

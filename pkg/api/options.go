@@ -93,10 +93,30 @@ type ModeContext struct {
 // layer so callers can customise filesystem/network/resource guards without
 // touching lower-level packages.
 type SandboxOptions struct {
+	Type          string
 	Root          string
 	AllowedPaths  []string
 	NetworkAllow  []string
 	ResourceLimit sandbox.ResourceLimits
+	GVisor        *GVisorOptions
+}
+
+// GVisorOptions configures the gVisor-backed sandbox mode.
+type GVisorOptions struct {
+	Enabled                    bool
+	DefaultGuestCwd            string
+	AutoCreateSessionWorkspace bool
+	SessionWorkspaceBase       string
+	HelperModeFlag             string
+	Mounts                     []MountSpec
+}
+
+// MountSpec describes one host-to-guest filesystem exposure.
+type MountSpec struct {
+	HostPath        string
+	GuestPath       string
+	ReadOnly        bool
+	CreateIfMissing bool
 }
 
 // PermissionRequest captures a permission prompt for sandbox "ask" matches.
@@ -419,6 +439,7 @@ func (o Options) withDefaults() Options {
 	if o.Sandbox.Root == "" {
 		o.Sandbox.Root = o.ProjectRoot
 	}
+	o.Sandbox = normalizeSandboxOptions(o.ProjectRoot, o.Sandbox)
 
 	// 根据 EntryPoint 自动设置网络白名单默认值
 	if len(o.Sandbox.NetworkAllow) == 0 {
@@ -542,7 +563,73 @@ func freezeSandboxOptions(in SandboxOptions) SandboxOptions {
 	if len(in.NetworkAllow) > 0 {
 		out.NetworkAllow = append([]string(nil), in.NetworkAllow...)
 	}
+	if in.GVisor != nil {
+		gv := *in.GVisor
+		if len(in.GVisor.Mounts) > 0 {
+			gv.Mounts = append([]MountSpec(nil), in.GVisor.Mounts...)
+		}
+		out.GVisor = &gv
+	}
 	return out
+}
+
+func normalizeSandboxOptions(projectRoot string, in SandboxOptions) SandboxOptions {
+	out := in
+	if out.GVisor == nil {
+		return out
+	}
+	gv := *out.GVisor
+	if strings.TrimSpace(gv.HelperModeFlag) == "" {
+		gv.HelperModeFlag = "--agentkit-gvisor-helper"
+	}
+	if strings.TrimSpace(gv.DefaultGuestCwd) == "" {
+		gv.DefaultGuestCwd = "/workspace"
+	}
+	if gv.AutoCreateSessionWorkspace || len(gv.Mounts) == 0 {
+		gv.AutoCreateSessionWorkspace = true
+	}
+	if strings.TrimSpace(gv.SessionWorkspaceBase) == "" {
+		gv.SessionWorkspaceBase = filepath.Join(projectRoot, "workspace")
+	} else if !filepath.IsAbs(gv.SessionWorkspaceBase) {
+		gv.SessionWorkspaceBase = filepath.Join(projectRoot, gv.SessionWorkspaceBase)
+	}
+	gv.SessionWorkspaceBase = filepath.Clean(gv.SessionWorkspaceBase)
+	if len(gv.Mounts) > 0 {
+		mounts := make([]MountSpec, len(gv.Mounts))
+		copy(mounts, gv.Mounts)
+		gv.Mounts = mounts
+	}
+	out.GVisor = &gv
+	return out
+}
+
+func validateSandboxOptions(projectRoot string, in SandboxOptions) error {
+	if in.GVisor == nil {
+		return nil
+	}
+	cfg := normalizeSandboxOptions(projectRoot, in)
+	gv := cfg.GVisor
+	if gv == nil {
+		return nil
+	}
+	seen := make([]string, 0, len(gv.Mounts))
+	for _, mount := range gv.Mounts {
+		guest := strings.TrimSpace(mount.GuestPath)
+		if guest == "" {
+			return errors.New("api: gvisor mount guest path is required")
+		}
+		if !filepath.IsAbs(guest) {
+			return fmt.Errorf("api: gvisor mount guest path must be absolute: %s", guest)
+		}
+		guest = filepath.Clean(guest)
+		for _, existing := range seen {
+			if guest == existing || strings.HasPrefix(guest+"/", existing+"/") || strings.HasPrefix(existing+"/", guest+"/") {
+				return fmt.Errorf("api: overlapping gvisor guest mount paths: %s and %s", guest, existing)
+			}
+		}
+		seen = append(seen, guest)
+	}
+	return nil
 }
 
 func freezeMode(in ModeContext) ModeContext {
