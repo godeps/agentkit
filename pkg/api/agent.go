@@ -155,7 +155,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		ownsTaskStore = true
 	}
 	registry := tool.NewRegistry()
-	taskTool, err := registerTools(registry, opts, settings, skReg, cmdExec)
+	taskTool, err := registerTools(registry, opts, settings, skReg, cmdExec, execEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -1475,10 +1475,14 @@ func approvalActor(approver string) string {
 
 // ----------------- config + registries -----------------
 
-func registerTools(registry *tool.Registry, opts Options, settings *config.Settings, skReg *skills.Registry, cmdExec *commands.Executor) (*toolbuiltin.TaskTool, error) {
+func registerTools(registry *tool.Registry, opts Options, settings *config.Settings, skReg *skills.Registry, cmdExec *commands.Executor, execEnvOpt ...sandboxenv.ExecutionEnvironment) (*toolbuiltin.TaskTool, error) {
 	entry := effectiveEntryPoint(opts)
 	tools := opts.Tools
 	var taskTool *toolbuiltin.TaskTool
+	var execEnv sandboxenv.ExecutionEnvironment
+	if len(execEnvOpt) > 0 {
+		execEnv = execEnvOpt[0]
+	}
 
 	if len(tools) == 0 {
 		sandboxDisabled := settings != nil && settings.Sandbox != nil && settings.Sandbox.Enabled != nil && !*settings.Sandbox.Enabled
@@ -1489,7 +1493,7 @@ func registerTools(registry *tool.Registry, opts Options, settings *config.Setti
 			cmdExec = commands.NewExecutor()
 		}
 
-		factories := builtinToolFactories(opts.ProjectRoot, sandboxDisabled, entry, settings, skReg, cmdExec, opts.TaskStore)
+		factories := builtinToolFactories(opts.ProjectRoot, sandboxDisabled, entry, settings, skReg, cmdExec, opts.TaskStore, execEnv)
 		names := builtinOrder(entry)
 		selectedNames := filterBuiltinNames(opts.EnabledBuiltinTools, names)
 		for _, name := range selectedNames {
@@ -1567,8 +1571,12 @@ func registerTools(registry *tool.Registry, opts Options, settings *config.Setti
 	return taskTool, nil
 }
 
-func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, settings *config.Settings, skReg *skills.Registry, cmdExec *commands.Executor, taskStore tasks.Store) map[string]func() tool.Tool {
+func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, settings *config.Settings, skReg *skills.Registry, cmdExec *commands.Executor, taskStore tasks.Store, execEnvOpt ...sandboxenv.ExecutionEnvironment) map[string]func() tool.Tool {
 	factories := map[string]func() tool.Tool{}
+	var execEnv sandboxenv.ExecutionEnvironment
+	if len(execEnvOpt) > 0 {
+		execEnv = execEnvOpt[0]
+	}
 
 	var (
 		syncThresholdBytes  int
@@ -1603,22 +1611,34 @@ func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, s
 	}
 
 	readCtor := func() tool.Tool {
+		var read *toolbuiltin.ReadTool
 		if sandboxDisabled {
-			return toolbuiltin.NewReadToolWithSandbox(root, security.NewDisabledSandbox())
+			read = toolbuiltin.NewReadToolWithSandbox(root, security.NewDisabledSandbox())
+		} else {
+			read = toolbuiltin.NewReadToolWithRoot(root)
 		}
-		return toolbuiltin.NewReadToolWithRoot(root)
+		read.SetEnvironment(execEnv)
+		return read
 	}
 	writeCtor := func() tool.Tool {
+		var write *toolbuiltin.WriteTool
 		if sandboxDisabled {
-			return toolbuiltin.NewWriteToolWithSandbox(root, security.NewDisabledSandbox())
+			write = toolbuiltin.NewWriteToolWithSandbox(root, security.NewDisabledSandbox())
+		} else {
+			write = toolbuiltin.NewWriteToolWithRoot(root)
 		}
-		return toolbuiltin.NewWriteToolWithRoot(root)
+		write.SetEnvironment(execEnv)
+		return write
 	}
 	editCtor := func() tool.Tool {
+		var edit *toolbuiltin.EditTool
 		if sandboxDisabled {
-			return toolbuiltin.NewEditToolWithSandbox(root, security.NewDisabledSandbox())
+			edit = toolbuiltin.NewEditToolWithSandbox(root, security.NewDisabledSandbox())
+		} else {
+			edit = toolbuiltin.NewEditToolWithRoot(root)
 		}
-		return toolbuiltin.NewEditToolWithRoot(root)
+		edit.SetEnvironment(execEnv)
+		return edit
 	}
 
 	respectGitignore := true
