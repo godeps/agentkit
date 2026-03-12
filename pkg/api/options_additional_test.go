@@ -136,6 +136,85 @@ func TestOptionsCompactAndTokenOptions(t *testing.T) {
 	}
 }
 
+func TestSandboxOptionsDefaultsGVisorWorkspaceBase(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("AGENTSDK_PROJECT_ROOT", root)
+
+	opts := Options{
+		ProjectRoot: root,
+		Sandbox: SandboxOptions{
+			Type:   "gvisor",
+			GVisor: &GVisorOptions{Enabled: true},
+		},
+	}
+	got := opts.withDefaults()
+	if got.Sandbox.GVisor == nil {
+		t.Fatal("expected gvisor config")
+	}
+	if got.Sandbox.GVisor.HelperModeFlag != "--agentkit-gvisor-helper" {
+		t.Fatalf("unexpected helper flag %q", got.Sandbox.GVisor.HelperModeFlag)
+	}
+	if got.Sandbox.GVisor.DefaultGuestCwd != "/workspace" {
+		t.Fatalf("unexpected guest cwd %q", got.Sandbox.GVisor.DefaultGuestCwd)
+	}
+	if got.Sandbox.GVisor.SessionWorkspaceBase != filepath.Join(root, "workspace") {
+		t.Fatalf("unexpected workspace base %q", got.Sandbox.GVisor.SessionWorkspaceBase)
+	}
+	if !got.Sandbox.GVisor.AutoCreateSessionWorkspace {
+		t.Fatalf("expected auto-create session workspace default")
+	}
+}
+
+func TestSandboxOptionsFreezeCopiesGVisorConfig(t *testing.T) {
+	opts := Options{
+		Sandbox: SandboxOptions{
+			GVisor: &GVisorOptions{
+				Enabled:              true,
+				SessionWorkspaceBase: "/tmp/workspace",
+				Mounts: []MountSpec{
+					{HostPath: "/tmp/host", GuestPath: "/workspace", ReadOnly: true},
+				},
+			},
+		},
+	}
+	frozen := opts.frozen()
+	opts.Sandbox.GVisor.SessionWorkspaceBase = "/mutated"
+	opts.Sandbox.GVisor.Mounts[0].GuestPath = "/mutated"
+	if frozen.Sandbox.GVisor.SessionWorkspaceBase != "/tmp/workspace" {
+		t.Fatalf("unexpected frozen workspace base %q", frozen.Sandbox.GVisor.SessionWorkspaceBase)
+	}
+	if frozen.Sandbox.GVisor.Mounts[0].GuestPath != "/workspace" {
+		t.Fatalf("unexpected frozen guest path %q", frozen.Sandbox.GVisor.Mounts[0].GuestPath)
+	}
+}
+
+func TestSandboxOptionsRejectsInvalidGuestMounts(t *testing.T) {
+	t.Run("relative guest path rejected", func(t *testing.T) {
+		err := validateSandboxOptions(t.TempDir(), SandboxOptions{
+			GVisor: &GVisorOptions{
+				Mounts: []MountSpec{{HostPath: "/tmp/host", GuestPath: "workspace"}},
+			},
+		})
+		if err == nil {
+			t.Fatal("expected validation error")
+		}
+	})
+
+	t.Run("overlapping guest paths rejected", func(t *testing.T) {
+		err := validateSandboxOptions(t.TempDir(), SandboxOptions{
+			GVisor: &GVisorOptions{
+				Mounts: []MountSpec{
+					{HostPath: "/tmp/host1", GuestPath: "/workspace"},
+					{HostPath: "/tmp/host2", GuestPath: "/workspace/out"},
+				},
+			},
+		})
+		if err == nil {
+			t.Fatal("expected overlap validation error")
+		}
+	})
+}
+
 type stubTool struct{ name string }
 
 func (t *stubTool) Name() string             { return t.name }
