@@ -81,7 +81,7 @@ func buildSandboxManager(opts Options, settings *config.Settings) (*sandbox.Mana
 
 func buildExecutionEnvironment(opts Options) sandboxenv.ExecutionEnvironment {
 	if opts.Sandbox.Type == "gvisor" || (opts.Sandbox.GVisor != nil && opts.Sandbox.GVisor.Enabled) {
-		return gvisorenv.New(opts.ProjectRoot)
+		return gvisorenv.New(opts.ProjectRoot, opts.Sandbox.GVisor)
 	}
 	return hostenv.New(opts.ProjectRoot)
 }
