@@ -180,3 +180,27 @@ func TestCLIReplUsesSharedBannerAndCommandLoop(t *testing.T) {
 		t.Fatalf("expected clikit repl to be called")
 	}
 }
+
+func TestRunGVisorHelperMode(t *testing.T) {
+	orig := runGVisorHelper
+	t.Cleanup(func() {
+		runGVisorHelper = orig
+	})
+	called := false
+	runGVisorHelper = func(ctx context.Context, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
+		called = true
+		_, _ = io.WriteString(stdout, `{"success":true}`+"\n")
+		return nil
+	}
+
+	var stdout bytes.Buffer
+	if err := run([]string{"--agentkit-gvisor-helper"}, &stdout, io.Discard); err != nil {
+		t.Fatalf("run helper: %v", err)
+	}
+	if !called {
+		t.Fatalf("expected helper path to be called")
+	}
+	if !strings.Contains(stdout.String(), `"success":true`) {
+		t.Fatalf("unexpected helper stdout: %s", stdout.String())
+	}
+}
