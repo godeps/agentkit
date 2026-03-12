@@ -42,3 +42,4 @@ tools.json
 .trace
 trace-out/
 other/
+.worktrees/
