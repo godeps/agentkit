@@ -2,12 +2,14 @@ package toolbuiltin
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
 	"github.com/godeps/agentkit/pkg/security"
 )
 
@@ -18,6 +20,7 @@ type fileSandbox struct {
 	sandbox  *security.Sandbox
 	root     string
 	maxBytes int64
+	env      sandboxenv.ExecutionEnvironment
 }
 
 func newFileSandbox(root string) *fileSandbox {
@@ -31,6 +34,47 @@ func newFileSandboxWithSandbox(root string, sandbox *security.Sandbox) *fileSand
 		root:     resolveRoot(root),
 		maxBytes: defaultMaxFileBytes,
 	}
+}
+
+func (f *fileSandbox) SetEnvironment(env sandboxenv.ExecutionEnvironment) {
+	if f != nil {
+		f.env = env
+	}
+}
+
+func (f *fileSandbox) prepareSession(ctx context.Context) (*sandboxenv.PreparedSession, error) {
+	if f == nil || f.env == nil {
+		return nil, nil
+	}
+	return f.env.PrepareSession(ctx, sandboxenv.SessionContext{
+		SessionID:   bashSessionID(ctx),
+		ProjectRoot: f.root,
+	})
+}
+
+func (f *fileSandbox) resolveGuestPath(raw interface{}, ps *sandboxenv.PreparedSession) (string, error) {
+	if ps == nil || ps.SandboxType != "gvisor" {
+		return f.resolvePath(raw)
+	}
+	if raw == nil {
+		return "", errors.New("path is required")
+	}
+	pathStr, err := coerceString(raw)
+	if err != nil {
+		return "", fmt.Errorf("path must be string: %w", err)
+	}
+	trimmed := strings.TrimSpace(pathStr)
+	if trimmed == "" {
+		return "", errors.New("path cannot be empty")
+	}
+	if filepath.IsAbs(trimmed) {
+		return filepath.Clean(trimmed), nil
+	}
+	base := ps.GuestCwd
+	if strings.TrimSpace(base) == "" {
+		base = "/workspace"
+	}
+	return filepath.Clean(filepath.Join(base, trimmed)), nil
 }
 
 func (f *fileSandbox) resolvePath(raw interface{}) (string, error) {

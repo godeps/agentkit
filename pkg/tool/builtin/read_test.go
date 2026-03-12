@@ -9,6 +9,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/godeps/agentkit/pkg/middleware"
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
+	"github.com/godeps/agentkit/pkg/sandbox/gvisorenv"
 )
 
 func TestReadToolCatFormatting(t *testing.T) {
@@ -259,5 +263,33 @@ func TestReadToolMetadataAndHelpers(t *testing.T) {
 	}
 	if !strings.Contains(got, "Output truncated at 10 bytes") {
 		t.Fatalf("expected truncation notice, got %q", got)
+	}
+}
+
+func TestReadToolUsesGuestPathWithGVisorEnvironment(t *testing.T) {
+	skipIfWindows(t)
+	root := cleanTempDir(t)
+	sessionPath := filepath.Join(root, "workspace", "sess-gv-read")
+	if err := os.MkdirAll(sessionPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionPath, "note.txt"), []byte("hello"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	env := gvisorenv.New(root, &sandboxenv.GVisorOptions{
+		Enabled:                    true,
+		AutoCreateSessionWorkspace: true,
+		SessionWorkspaceBase:       filepath.Join(root, "workspace"),
+	})
+	tool := NewReadToolWithRoot(root)
+	tool.SetEnvironment(env)
+
+	ctx := context.WithValue(context.Background(), middleware.SessionIDContextKey, "sess-gv-read")
+	res, err := tool.Execute(ctx, map[string]any{"file_path": "/workspace/note.txt"})
+	if err != nil {
+		t.Fatalf("read execute failed: %v", err)
+	}
+	if !strings.Contains(res.Output, "hello") {
+		t.Fatalf("unexpected output: %q", res.Output)
 	}
 }

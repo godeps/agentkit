@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/godeps/agentkit/pkg/middleware"
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
+	"github.com/godeps/agentkit/pkg/sandbox/gvisorenv"
 )
 
 func TestEditToolSingleReplacement(t *testing.T) {
@@ -250,5 +254,42 @@ func TestEditToolHelperErrors(t *testing.T) {
 	}
 	if _, err := tool.parseReplaceAll(map[string]any{"replace_all": []int{1}}); err == nil {
 		t.Fatalf("expected type error for replace_all helper")
+	}
+}
+
+func TestEditToolUsesGuestPathWithGVisorEnvironment(t *testing.T) {
+	skipIfWindows(t)
+	root := cleanTempDir(t)
+	sessionPath := filepath.Join(root, "workspace", "sess-gv-edit")
+	if err := os.MkdirAll(sessionPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	target := filepath.Join(sessionPath, "note.txt")
+	if err := os.WriteFile(target, []byte("hello world"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	env := gvisorenv.New(root, &sandboxenv.GVisorOptions{
+		Enabled:                    true,
+		AutoCreateSessionWorkspace: true,
+		SessionWorkspaceBase:       filepath.Join(root, "workspace"),
+	})
+	tool := NewEditToolWithRoot(root)
+	tool.SetEnvironment(env)
+
+	ctx := context.WithValue(context.Background(), middleware.SessionIDContextKey, "sess-gv-edit")
+	_, err := tool.Execute(ctx, map[string]any{
+		"file_path":  "/workspace/note.txt",
+		"old_string": "world",
+		"new_string": "gvisor",
+	})
+	if err != nil {
+		t.Fatalf("edit execute failed: %v", err)
+	}
+	content, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read back file: %v", err)
+	}
+	if !strings.Contains(string(content), "gvisor") {
+		t.Fatalf("unexpected content: %q", string(content))
 	}
 }

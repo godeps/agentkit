@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
 	"github.com/godeps/agentkit/pkg/security"
 	"github.com/godeps/agentkit/pkg/tool"
 )
@@ -87,6 +88,12 @@ func (r *ReadTool) Description() string { return readDescription }
 
 func (r *ReadTool) Schema() *tool.JSONSchema { return readSchema }
 
+func (r *ReadTool) SetEnvironment(env sandboxenv.ExecutionEnvironment) {
+	if r != nil && r.base != nil {
+		r.base.SetEnvironment(env)
+	}
+}
+
 func (r *ReadTool) Execute(ctx context.Context, params map[string]interface{}) (*tool.ToolResult, error) {
 	if ctx == nil {
 		return nil, errors.New("context is nil")
@@ -94,7 +101,11 @@ func (r *ReadTool) Execute(ctx context.Context, params map[string]interface{}) (
 	if r == nil || r.base == nil || r.base.sandbox == nil {
 		return nil, errors.New("read tool is not initialised")
 	}
-	path, err := r.resolveFilePath(params)
+	ps, err := r.base.prepareSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	path, err := r.resolveFilePath(params, ps)
 	if err != nil {
 		return nil, err
 	}
@@ -110,9 +121,18 @@ func (r *ReadTool) Execute(ctx context.Context, params map[string]interface{}) (
 		return nil, err
 	}
 
-	content, err := r.base.readFile(path)
-	if err != nil {
-		return nil, err
+	var content string
+	if ps != nil && ps.SandboxType == "gvisor" {
+		data, err := r.base.env.ReadFile(ctx, ps, path)
+		if err != nil {
+			return nil, err
+		}
+		content = string(data)
+	} else {
+		content, err = r.base.readFile(path)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	lines := splitFileLines(content)
@@ -155,7 +175,7 @@ func (r *ReadTool) Execute(ctx context.Context, params map[string]interface{}) (
 	}, nil
 }
 
-func (r *ReadTool) resolveFilePath(params map[string]interface{}) (string, error) {
+func (r *ReadTool) resolveFilePath(params map[string]interface{}, ps *sandboxenv.PreparedSession) (string, error) {
 	if params == nil {
 		return "", errors.New("params is nil")
 	}
@@ -163,7 +183,7 @@ func (r *ReadTool) resolveFilePath(params map[string]interface{}) (string, error
 	if !ok {
 		return "", errors.New("file_path is required")
 	}
-	return r.base.resolvePath(raw)
+	return r.base.resolveGuestPath(raw, ps)
 }
 
 func (r *ReadTool) parseOffset(params map[string]interface{}) (int, error) {

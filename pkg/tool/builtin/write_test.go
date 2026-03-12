@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/godeps/agentkit/pkg/middleware"
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
+	"github.com/godeps/agentkit/pkg/sandbox/gvisorenv"
 )
 
 func TestWriteToolCreatesFile(t *testing.T) {
@@ -105,5 +109,33 @@ func TestWriteToolHelperErrors(t *testing.T) {
 	}
 	if _, err := tool.parseContent(map[string]any{"content": 1}); err == nil {
 		t.Fatalf("expected error for non-string content")
+	}
+}
+
+func TestWriteToolUsesGuestPathWithGVisorEnvironment(t *testing.T) {
+	skipIfWindows(t)
+	root := cleanTempDir(t)
+	env := gvisorenv.New(root, &sandboxenv.GVisorOptions{
+		Enabled:                    true,
+		AutoCreateSessionWorkspace: true,
+		SessionWorkspaceBase:       filepath.Join(root, "workspace"),
+	})
+	tool := NewWriteToolWithRoot(root)
+	tool.SetEnvironment(env)
+
+	ctx := context.WithValue(context.Background(), middleware.SessionIDContextKey, "sess-gv-write")
+	_, err := tool.Execute(ctx, map[string]any{
+		"file_path": "/workspace/out.txt",
+		"content":   "hello",
+	})
+	if err != nil {
+		t.Fatalf("write execute failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "workspace", "sess-gv-write", "out.txt"))
+	if err != nil {
+		t.Fatalf("read back file: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Fatalf("content mismatch: %q", string(data))
 	}
 }

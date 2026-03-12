@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
 	"github.com/godeps/agentkit/pkg/security"
 	"github.com/godeps/agentkit/pkg/tool"
 )
@@ -60,6 +61,12 @@ func (w *WriteTool) Description() string { return writeDescription }
 
 func (w *WriteTool) Schema() *tool.JSONSchema { return writeSchema }
 
+func (w *WriteTool) SetEnvironment(env sandboxenv.ExecutionEnvironment) {
+	if w != nil && w.base != nil {
+		w.base.SetEnvironment(env)
+	}
+}
+
 func (w *WriteTool) Execute(ctx context.Context, params map[string]interface{}) (*tool.ToolResult, error) {
 	if ctx == nil {
 		return nil, errors.New("context is nil")
@@ -67,7 +74,11 @@ func (w *WriteTool) Execute(ctx context.Context, params map[string]interface{}) 
 	if w == nil || w.base == nil || w.base.sandbox == nil {
 		return nil, errors.New("write tool is not initialised")
 	}
-	path, err := w.resolveFilePath(params)
+	ps, err := w.base.prepareSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	path, err := w.resolveFilePath(params, ps)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +90,11 @@ func (w *WriteTool) Execute(ctx context.Context, params map[string]interface{}) 
 		return nil, err
 	}
 
-	if err := w.base.writeFile(path, content); err != nil {
+	if ps != nil && ps.SandboxType == "gvisor" {
+		if err := w.base.env.WriteFile(ctx, ps, path, []byte(content)); err != nil {
+			return nil, err
+		}
+	} else if err := w.base.writeFile(path, content); err != nil {
 		return nil, err
 	}
 
@@ -93,7 +108,7 @@ func (w *WriteTool) Execute(ctx context.Context, params map[string]interface{}) 
 	}, nil
 }
 
-func (w *WriteTool) resolveFilePath(params map[string]interface{}) (string, error) {
+func (w *WriteTool) resolveFilePath(params map[string]interface{}, ps *sandboxenv.PreparedSession) (string, error) {
 	if params == nil {
 		return "", errors.New("params is nil")
 	}
@@ -101,7 +116,7 @@ func (w *WriteTool) resolveFilePath(params map[string]interface{}) (string, erro
 	if !ok {
 		return "", errors.New("file_path is required")
 	}
-	return w.base.resolvePath(raw)
+	return w.base.resolveGuestPath(raw, ps)
 }
 
 func (w *WriteTool) parseContent(params map[string]interface{}) (string, error) {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
 	"github.com/godeps/agentkit/pkg/security"
 	"github.com/godeps/agentkit/pkg/tool"
 )
@@ -72,6 +73,12 @@ func (e *EditTool) Description() string { return editDescription }
 
 func (e *EditTool) Schema() *tool.JSONSchema { return editSchema }
 
+func (e *EditTool) SetEnvironment(env sandboxenv.ExecutionEnvironment) {
+	if e != nil && e.base != nil {
+		e.base.SetEnvironment(env)
+	}
+}
+
 func (e *EditTool) Execute(ctx context.Context, params map[string]interface{}) (*tool.ToolResult, error) {
 	if ctx == nil {
 		return nil, errors.New("context is nil")
@@ -79,7 +86,11 @@ func (e *EditTool) Execute(ctx context.Context, params map[string]interface{}) (
 	if e == nil || e.base == nil || e.base.sandbox == nil {
 		return nil, errors.New("edit tool is not initialised")
 	}
-	path, err := e.resolveFilePath(params)
+	ps, err := e.base.prepareSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	path, err := e.resolveFilePath(params, ps)
 	if err != nil {
 		return nil, err
 	}
@@ -105,17 +116,28 @@ func (e *EditTool) Execute(ctx context.Context, params map[string]interface{}) (
 		return nil, err
 	}
 
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("stat file: %w", err)
-	}
-	if info.IsDir() {
-		return nil, fmt.Errorf("%s is a directory", path)
-	}
-
-	content, err := e.base.readFile(path)
-	if err != nil {
-		return nil, err
+	var (
+		content string
+		info    os.FileInfo
+	)
+	if ps != nil && ps.SandboxType == "gvisor" {
+		data, err := e.base.env.ReadFile(ctx, ps, path)
+		if err != nil {
+			return nil, err
+		}
+		content = string(data)
+	} else {
+		info, err = os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("stat file: %w", err)
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("%s is a directory", path)
+		}
+		content, err = e.base.readFile(path)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	matches := strings.Count(content, oldString)
@@ -141,7 +163,11 @@ func (e *EditTool) Execute(ctx context.Context, params map[string]interface{}) (
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(path, []byte(updated), info.Mode()); err != nil {
+	if ps != nil && ps.SandboxType == "gvisor" {
+		if err := e.base.env.WriteFile(ctx, ps, path, []byte(updated)); err != nil {
+			return nil, err
+		}
+	} else if err := os.WriteFile(path, []byte(updated), info.Mode()); err != nil {
 		return nil, fmt.Errorf("write file: %w", err)
 	}
 
@@ -157,7 +183,7 @@ func (e *EditTool) Execute(ctx context.Context, params map[string]interface{}) (
 	}, nil
 }
 
-func (e *EditTool) resolveFilePath(params map[string]interface{}) (string, error) {
+func (e *EditTool) resolveFilePath(params map[string]interface{}, ps *sandboxenv.PreparedSession) (string, error) {
 	if params == nil {
 		return "", errors.New("params is nil")
 	}
@@ -165,7 +191,7 @@ func (e *EditTool) resolveFilePath(params map[string]interface{}) (string, error
 	if !ok {
 		return "", errors.New("file_path is required")
 	}
-	return e.base.resolvePath(raw)
+	return e.base.resolveGuestPath(raw, ps)
 }
 
 func (e *EditTool) parseRequiredString(params map[string]interface{}, key string) (string, error) {
