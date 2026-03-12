@@ -18,6 +18,7 @@ import (
 	"github.com/godeps/agentkit/pkg/api"
 	"github.com/godeps/agentkit/pkg/clikit"
 	modelpkg "github.com/godeps/agentkit/pkg/model"
+	"github.com/godeps/agentkit/pkg/sandbox/gvisorhelper"
 )
 
 var serveACPStdio = acpserver.ServeStdio
@@ -26,6 +27,7 @@ var runtimeFactory = func(ctx context.Context, opts api.Options) (runtimeClient,
 }
 var clikitRunStream = clikit.RunStream
 var clikitRunREPL = clikit.RunREPL
+var runGVisorHelper = gvisorhelper.Run
 
 type runtimeClient interface {
 	Run(context.Context, api.Request) (*api.Response, error)
@@ -61,6 +63,7 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	stream := flags.Bool("stream", false, "Stream events instead of waiting for completion")
 	streamFormat := flags.String("stream-format", "json", "Streaming output format: json|rendered")
 	repl := flags.Bool("repl", false, "Run interactive REPL mode")
+	gvisorHelper := flags.Bool("agentkit-gvisor-helper", false, "Run hidden gVisor helper mode")
 	verbose := flags.Bool("verbose", false, "Verbose stream diagnostics")
 	waterfall := flags.String("waterfall", clikit.WaterfallModeFull, "Waterfall output mode: off|summary|full")
 	skillsRecursive := flags.Bool("skills-recursive", true, "Discover SKILL.md recursively")
@@ -76,6 +79,9 @@ func run(argv []string, stdout, stderr io.Writer) error {
 
 	if err := flags.Parse(argv); err != nil {
 		return err
+	}
+	if *gvisorHelper {
+		return runGVisorHelper(context.Background(), os.Stdin, stdout, stderr)
 	}
 	if v := strings.TrimSpace(os.Getenv("AGENTSDK_TIMEOUT_MS")); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {

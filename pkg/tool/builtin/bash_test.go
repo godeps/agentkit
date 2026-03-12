@@ -8,6 +8,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/godeps/agentkit/pkg/middleware"
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
+	"github.com/godeps/agentkit/pkg/sandbox/gvisorenv"
 )
 
 func TestBashToolExecuteScript(t *testing.T) {
@@ -215,6 +219,29 @@ func TestDurationFromParam(t *testing.T) {
 		if got != tt.want {
 			t.Fatalf("durationFromParam(%v)=%v want %v", tt.value, got, tt.want)
 		}
+	}
+}
+
+func TestBashToolUsesGVisorEnvironment(t *testing.T) {
+	skipIfWindows(t)
+	root := cleanTempDir(t)
+	env := gvisorenv.New(root, &sandboxenv.GVisorOptions{
+		Enabled:                    true,
+		AutoCreateSessionWorkspace: true,
+		SessionWorkspaceBase:       filepath.Join(root, "workspace"),
+	})
+	tool := NewBashToolWithRoot(root)
+	tool.SetEnvironment(env)
+	ctx := context.WithValue(context.Background(), middleware.SessionIDContextKey, "sess-gv-bash")
+
+	res, err := tool.Execute(ctx, map[string]interface{}{
+		"command": "printf 'hello'",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if strings.TrimSpace(res.Output) != "hello" {
+		t.Fatalf("unexpected output %q", res.Output)
 	}
 }
 

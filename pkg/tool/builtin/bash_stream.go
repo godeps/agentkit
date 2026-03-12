@@ -32,9 +32,16 @@ func (b *BashTool) StreamExecute(ctx context.Context, params map[string]interfac
 	if err := b.sandbox.ValidateCommand(command); err != nil {
 		return nil, err
 	}
-	workdir, err := b.resolveWorkdir(params)
+	ps, err := b.prepareSession(ctx)
 	if err != nil {
 		return nil, err
+	}
+	workdir, err := b.resolveWorkdir(params, ps)
+	if err != nil {
+		return nil, err
+	}
+	if ps != nil && ps.SandboxType == "gvisor" {
+		return nil, errors.New("streaming bash is not supported in gvisor mode")
 	}
 	timeout, err := b.resolveTimeout(params)
 	if err != nil {

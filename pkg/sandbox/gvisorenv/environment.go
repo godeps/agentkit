@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
+	"github.com/godeps/agentkit/pkg/sandbox/gvisorhelper"
 	"github.com/godeps/agentkit/pkg/sandbox/pathmap"
 )
 
@@ -31,8 +33,48 @@ func (e *Environment) PrepareSession(ctx context.Context, session sandboxenv.Ses
 	return prepared, err
 }
 
-func (e *Environment) RunCommand(context.Context, *sandboxenv.PreparedSession, sandboxenv.CommandRequest) (*sandboxenv.CommandResult, error) {
-	return nil, errGVisorNotImplemented
+func (e *Environment) RunCommand(ctx context.Context, ps *sandboxenv.PreparedSession, req sandboxenv.CommandRequest) (*sandboxenv.CommandResult, error) {
+	mapper, err := mapperFromPreparedSession(ps)
+	if err != nil {
+		return nil, err
+	}
+	workdir := req.Workdir
+	if strings.TrimSpace(workdir) == "" {
+		workdir = ps.GuestCwd
+	}
+	hostCwd, _, err := mapper.GuestToHost(workdir)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := gvisorhelper.Invoke(ctx, gvisorhelper.Request{
+		Version:   "v1",
+		SessionID: ps.SessionID,
+		Command:   req.Command,
+		GuestCwd:  hostCwd,
+		TimeoutMs: req.Timeout.Milliseconds(),
+		Env:       req.Env,
+	}, e.helperFlag())
+	if err != nil {
+		return nil, err
+	}
+	result := &sandboxenv.CommandResult{
+		Stdout:     resp.Stdout,
+		Stderr:     resp.Stderr,
+		ExitCode:   resp.ExitCode,
+		Duration:   time.Duration(resp.DurationMs) * time.Millisecond,
+		OutputFile: "",
+	}
+	if !resp.Success && resp.Error != "" {
+		return result, fmt.Errorf("gvisorenv: command failed: %s", resp.Error)
+	}
+	return result, nil
+}
+
+func (e *Environment) helperFlag() string {
+	if e == nil || e.gvisor == nil || strings.TrimSpace(e.gvisor.HelperModeFlag) == "" {
+		return "--agentkit-gvisor-helper"
+	}
+	return e.gvisor.HelperModeFlag
 }
 
 func (e *Environment) ReadFile(_ context.Context, ps *sandboxenv.PreparedSession, path string) ([]byte, error) {

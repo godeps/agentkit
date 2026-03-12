@@ -17,6 +17,7 @@ import (
 
 	"github.com/godeps/agentkit/pkg/middleware"
 	"github.com/godeps/agentkit/pkg/model"
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
 	"github.com/godeps/agentkit/pkg/security"
 	"github.com/godeps/agentkit/pkg/tool"
 )
@@ -212,6 +213,7 @@ type BashTool struct {
 	sandbox *security.Sandbox
 	root    string
 	timeout time.Duration
+	env     sandboxenv.ExecutionEnvironment
 
 	outputThresholdBytes int
 }
@@ -277,6 +279,12 @@ func (b *BashTool) AllowShellMetachars(allow bool) {
 	}
 }
 
+func (b *BashTool) SetEnvironment(env sandboxenv.ExecutionEnvironment) {
+	if b != nil {
+		b.env = env
+	}
+}
+
 func (b *BashTool) Name() string { return "Bash" }
 
 func (b *BashTool) Description() string {
@@ -303,7 +311,11 @@ func (b *BashTool) Execute(ctx context.Context, params map[string]interface{}) (
 	if err := b.sandbox.ValidateCommand(command); err != nil {
 		return nil, err
 	}
-	workdir, err := b.resolveWorkdir(params)
+	ps, err := b.prepareSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	workdir, err := b.resolveWorkdir(params, ps)
 	if err != nil {
 		return nil, err
 	}
@@ -332,6 +344,27 @@ func (b *BashTool) Execute(ctx context.Context, params map[string]interface{}) (
 			return nil, fmt.Errorf("marshal async result: %w", err)
 		}
 		return &tool.ToolResult{Success: true, Output: string(out), Data: payload}, nil
+	}
+
+	if ps != nil && ps.SandboxType == "gvisor" && b.env != nil {
+		res, err := b.env.RunCommand(ctx, ps, sandboxenv.CommandRequest{
+			Command: command,
+			Workdir: workdir,
+			Timeout: timeout,
+		})
+		if res == nil {
+			res = &sandboxenv.CommandResult{}
+		}
+		data := map[string]interface{}{
+			"workdir":     workdir,
+			"duration_ms": res.Duration.Milliseconds(),
+			"timeout_ms":  timeout.Milliseconds(),
+		}
+		output := combineOutput(res.Stdout, res.Stderr)
+		if err != nil {
+			return &tool.ToolResult{Success: false, Output: output, Data: data}, err
+		}
+		return &tool.ToolResult{Success: res.ExitCode == 0, Output: output, Data: data}, nil
 	}
 
 	execCtx := ctx
@@ -382,7 +415,24 @@ func (b *BashTool) Execute(ctx context.Context, params map[string]interface{}) (
 	return result, nil
 }
 
-func (b *BashTool) resolveWorkdir(params map[string]interface{}) (string, error) {
+func (b *BashTool) resolveWorkdir(params map[string]interface{}, ps *sandboxenv.PreparedSession) (string, error) {
+	if ps != nil && ps.SandboxType == "gvisor" {
+		dir := ps.GuestCwd
+		if raw, ok := params["workdir"]; ok && raw != nil {
+			value, err := coerceString(raw)
+			if err != nil {
+				return "", fmt.Errorf("workdir must be string: %w", err)
+			}
+			value = strings.TrimSpace(value)
+			if value != "" {
+				dir = value
+			}
+		}
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(ps.GuestCwd, dir)
+		}
+		return filepath.Clean(dir), nil
+	}
 	dir := b.root
 	if raw, ok := params["workdir"]; ok && raw != nil {
 		value, err := coerceString(raw)
@@ -399,6 +449,16 @@ func (b *BashTool) resolveWorkdir(params map[string]interface{}) (string, error)
 	}
 	dir = filepath.Clean(dir)
 	return b.ensureDirectory(dir)
+}
+
+func (b *BashTool) prepareSession(ctx context.Context) (*sandboxenv.PreparedSession, error) {
+	if b == nil || b.env == nil {
+		return nil, nil
+	}
+	return b.env.PrepareSession(ctx, sandboxenv.SessionContext{
+		SessionID:   bashSessionID(ctx),
+		ProjectRoot: b.root,
+	})
 }
 
 func (b *BashTool) ensureDirectory(path string) (string, error) {

@@ -1604,6 +1604,7 @@ func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, s
 		if syncThresholdBytes > 0 {
 			bash.SetOutputThresholdBytes(syncThresholdBytes)
 		}
+		bash.SetEnvironment(execEnv)
 		if entry == EntryPointCLI {
 			bash.AllowShellMetachars(true)
 		}
