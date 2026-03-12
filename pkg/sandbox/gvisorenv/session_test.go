@@ -80,3 +80,26 @@ func TestPrepareSessionUsesWorkspaceSessionID(t *testing.T) {
 		t.Fatalf("host path = %q, want %q", mounts[0].HostPath, want)
 	}
 }
+
+func TestPreparedSessionSupportsReadWrite(t *testing.T) {
+	root := t.TempDir()
+	env := New(root, &sandboxenv.GVisorOptions{
+		Enabled:                    true,
+		AutoCreateSessionWorkspace: true,
+		SessionWorkspaceBase:       filepath.Join(root, "workspace"),
+	})
+	ps, err := env.PrepareSession(context.Background(), sandboxenv.SessionContext{SessionID: "rw"})
+	if err != nil {
+		t.Fatalf("prepare session: %v", err)
+	}
+	if err := env.WriteFile(context.Background(), ps, "/workspace/out.txt", []byte("hello")); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	data, err := env.ReadFile(context.Background(), ps, "/workspace/out.txt")
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Fatalf("content = %q", string(data))
+	}
+}
