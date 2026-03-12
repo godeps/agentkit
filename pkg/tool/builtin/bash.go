@@ -346,7 +346,7 @@ func (b *BashTool) Execute(ctx context.Context, params map[string]interface{}) (
 		return &tool.ToolResult{Success: true, Output: string(out), Data: payload}, nil
 	}
 
-	if ps != nil && ps.SandboxType == "gvisor" && b.env != nil {
+	if isVirtualizedSandboxSession(ps) && b.env != nil {
 		res, err := b.env.RunCommand(ctx, ps, sandboxenv.CommandRequest{
 			Command: command,
 			Workdir: workdir,
@@ -416,7 +416,7 @@ func (b *BashTool) Execute(ctx context.Context, params map[string]interface{}) (
 }
 
 func (b *BashTool) resolveWorkdir(params map[string]interface{}, ps *sandboxenv.PreparedSession) (string, error) {
-	if ps != nil && ps.SandboxType == "gvisor" {
+	if isVirtualizedSandboxSession(ps) {
 		dir := ps.GuestCwd
 		if raw, ok := params["workdir"]; ok && raw != nil {
 			value, err := coerceString(raw)

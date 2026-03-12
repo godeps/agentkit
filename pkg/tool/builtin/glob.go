@@ -116,7 +116,7 @@ func (g *GlobTool) Execute(ctx context.Context, params map[string]interface{}) (
 		if err != nil {
 			return nil, err
 		}
-		if ps != nil && ps.SandboxType == "gvisor" {
+		if isVirtualizedSandboxSession(ps) {
 			if !filepath.IsAbs(pattern) {
 				pattern = filepath.Join(ps.GuestCwd, pattern)
 			}

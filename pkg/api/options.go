@@ -100,9 +100,11 @@ type SandboxOptions struct {
 	NetworkAllow  []string
 	ResourceLimit sandbox.ResourceLimits
 	GVisor        *sandboxenv.GVisorOptions
+	Govm          *sandboxenv.GovmOptions
 }
 
 type GVisorOptions = sandboxenv.GVisorOptions
+type GovmOptions = sandboxenv.GovmOptions
 type MountSpec = sandboxenv.MountSpec
 
 // PermissionRequest captures a permission prompt for sandbox "ask" matches.
@@ -556,64 +558,111 @@ func freezeSandboxOptions(in SandboxOptions) SandboxOptions {
 		}
 		out.GVisor = &gv
 	}
+	if in.Govm != nil {
+		gv := *in.Govm
+		if len(in.Govm.Mounts) > 0 {
+			gv.Mounts = append([]sandboxenv.MountSpec(nil), in.Govm.Mounts...)
+		}
+		out.Govm = &gv
+	}
 	return out
 }
 
 func normalizeSandboxOptions(projectRoot string, in SandboxOptions) SandboxOptions {
 	out := in
-	if out.GVisor == nil {
-		return out
+	if out.GVisor != nil {
+		gv := *out.GVisor
+		if strings.TrimSpace(gv.HelperModeFlag) == "" {
+			gv.HelperModeFlag = "--agentkit-gvisor-helper"
+		}
+		if strings.TrimSpace(gv.DefaultGuestCwd) == "" {
+			gv.DefaultGuestCwd = "/workspace"
+		}
+		if gv.AutoCreateSessionWorkspace || len(gv.Mounts) == 0 {
+			gv.AutoCreateSessionWorkspace = true
+		}
+		if strings.TrimSpace(gv.SessionWorkspaceBase) == "" {
+			gv.SessionWorkspaceBase = filepath.Join(projectRoot, "workspace")
+		} else if !filepath.IsAbs(gv.SessionWorkspaceBase) {
+			gv.SessionWorkspaceBase = filepath.Join(projectRoot, gv.SessionWorkspaceBase)
+		}
+		gv.SessionWorkspaceBase = filepath.Clean(gv.SessionWorkspaceBase)
+		if len(gv.Mounts) > 0 {
+			mounts := make([]MountSpec, len(gv.Mounts))
+			copy(mounts, gv.Mounts)
+			gv.Mounts = mounts
+		}
+		out.GVisor = &gv
 	}
-	gv := *out.GVisor
-	if strings.TrimSpace(gv.HelperModeFlag) == "" {
-		gv.HelperModeFlag = "--agentkit-gvisor-helper"
+	if out.Govm != nil {
+		gv := *out.Govm
+		if strings.TrimSpace(gv.DefaultGuestCwd) == "" {
+			gv.DefaultGuestCwd = "/workspace"
+		}
+		if gv.AutoCreateSessionWorkspace || len(gv.Mounts) == 0 {
+			gv.AutoCreateSessionWorkspace = true
+		}
+		if strings.TrimSpace(gv.SessionWorkspaceBase) == "" {
+			gv.SessionWorkspaceBase = filepath.Join(projectRoot, "workspace")
+		} else if !filepath.IsAbs(gv.SessionWorkspaceBase) {
+			gv.SessionWorkspaceBase = filepath.Join(projectRoot, gv.SessionWorkspaceBase)
+		}
+		gv.SessionWorkspaceBase = filepath.Clean(gv.SessionWorkspaceBase)
+		if strings.TrimSpace(gv.RuntimeHome) == "" {
+			gv.RuntimeHome = filepath.Join(projectRoot, ".govm")
+		} else if !filepath.IsAbs(gv.RuntimeHome) {
+			gv.RuntimeHome = filepath.Join(projectRoot, gv.RuntimeHome)
+		}
+		gv.RuntimeHome = filepath.Clean(gv.RuntimeHome)
+		if strings.TrimSpace(gv.OfflineImage) == "" && strings.TrimSpace(gv.Image) == "" {
+			gv.OfflineImage = "py312-alpine"
+		}
+		if len(gv.Mounts) > 0 {
+			mounts := make([]MountSpec, len(gv.Mounts))
+			copy(mounts, gv.Mounts)
+			gv.Mounts = mounts
+		}
+		out.Govm = &gv
 	}
-	if strings.TrimSpace(gv.DefaultGuestCwd) == "" {
-		gv.DefaultGuestCwd = "/workspace"
-	}
-	if gv.AutoCreateSessionWorkspace || len(gv.Mounts) == 0 {
-		gv.AutoCreateSessionWorkspace = true
-	}
-	if strings.TrimSpace(gv.SessionWorkspaceBase) == "" {
-		gv.SessionWorkspaceBase = filepath.Join(projectRoot, "workspace")
-	} else if !filepath.IsAbs(gv.SessionWorkspaceBase) {
-		gv.SessionWorkspaceBase = filepath.Join(projectRoot, gv.SessionWorkspaceBase)
-	}
-	gv.SessionWorkspaceBase = filepath.Clean(gv.SessionWorkspaceBase)
-	if len(gv.Mounts) > 0 {
-		mounts := make([]MountSpec, len(gv.Mounts))
-		copy(mounts, gv.Mounts)
-		gv.Mounts = mounts
-	}
-	out.GVisor = &gv
 	return out
 }
 
 func validateSandboxOptions(projectRoot string, in SandboxOptions) error {
-	if in.GVisor == nil {
-		return nil
-	}
 	cfg := normalizeSandboxOptions(projectRoot, in)
-	gv := cfg.GVisor
-	if gv == nil {
-		return nil
-	}
-	seen := make([]string, 0, len(gv.Mounts))
-	for _, mount := range gv.Mounts {
-		guest := strings.TrimSpace(mount.GuestPath)
-		if guest == "" {
-			return errors.New("api: gvisor mount guest path is required")
-		}
-		if !filepath.IsAbs(guest) {
-			return fmt.Errorf("api: gvisor mount guest path must be absolute: %s", guest)
-		}
-		guest = filepath.Clean(guest)
-		for _, existing := range seen {
-			if guest == existing || strings.HasPrefix(guest+"/", existing+"/") || strings.HasPrefix(existing+"/", guest+"/") {
-				return fmt.Errorf("api: overlapping gvisor guest mount paths: %s and %s", guest, existing)
+	for _, tc := range []struct {
+		name   string
+		mounts []MountSpec
+	}{
+		{name: "gvisor", mounts: nil},
+		{name: "govm", mounts: nil},
+	} {
+		switch tc.name {
+		case "gvisor":
+			if cfg.GVisor != nil {
+				tc.mounts = cfg.GVisor.Mounts
+			}
+		case "govm":
+			if cfg.Govm != nil {
+				tc.mounts = cfg.Govm.Mounts
 			}
 		}
-		seen = append(seen, guest)
+		seen := make([]string, 0, len(tc.mounts))
+		for _, mount := range tc.mounts {
+			guest := strings.TrimSpace(mount.GuestPath)
+			if guest == "" {
+				return fmt.Errorf("api: %s mount guest path is required", tc.name)
+			}
+			if !filepath.IsAbs(guest) {
+				return fmt.Errorf("api: %s mount guest path must be absolute: %s", tc.name, guest)
+			}
+			guest = filepath.Clean(guest)
+			for _, existing := range seen {
+				if guest == existing || strings.HasPrefix(guest+"/", existing+"/") || strings.HasPrefix(existing+"/", guest+"/") {
+					return fmt.Errorf("api: overlapping %s guest mount paths: %s and %s", tc.name, guest, existing)
+				}
+			}
+			seen = append(seen, guest)
+		}
 	}
 	return nil
 }

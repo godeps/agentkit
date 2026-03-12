@@ -82,6 +82,20 @@ type GVisorOptions struct {
 	Mounts                     []MountSpec
 }
 
+// GovmOptions configures the govm-backed sandbox mode.
+type GovmOptions struct {
+	Enabled                    bool
+	DefaultGuestCwd            string
+	AutoCreateSessionWorkspace bool
+	SessionWorkspaceBase       string
+	RuntimeHome                string
+	Image                      string
+	OfflineImage               string
+	CPUs                       int
+	MemoryMB                   int
+	Mounts                     []MountSpec
+}
+
 // MountSpec describes one host-to-guest filesystem exposure.
 type MountSpec struct {
 	HostPath        string

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/godeps/agentkit/pkg/config"
+	"github.com/godeps/agentkit/pkg/sandbox/govmenv"
 	"github.com/godeps/agentkit/pkg/sandbox/gvisorenv"
 	"github.com/godeps/agentkit/pkg/sandbox/hostenv"
 )
@@ -123,5 +124,19 @@ func TestBuildExecutionEnvironmentSelectsGVisor(t *testing.T) {
 	})
 	if _, ok := env.(*gvisorenv.Environment); !ok {
 		t.Fatalf("expected gvisor environment, got %T", env)
+	}
+}
+
+func TestBuildExecutionEnvironmentSelectsGovm(t *testing.T) {
+	root := t.TempDir()
+	env := buildExecutionEnvironment(Options{
+		ProjectRoot: root,
+		Sandbox: SandboxOptions{
+			Type: "govm",
+			Govm: &GovmOptions{Enabled: true},
+		},
+	})
+	if _, ok := env.(*govmenv.Environment); !ok {
+		t.Fatalf("expected govm environment, got %T", env)
 	}
 }

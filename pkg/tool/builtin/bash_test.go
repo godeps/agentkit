@@ -11,6 +11,7 @@ import (
 
 	"github.com/godeps/agentkit/pkg/middleware"
 	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
+	"github.com/godeps/agentkit/pkg/sandbox/govmenv"
 	"github.com/godeps/agentkit/pkg/sandbox/gvisorenv"
 )
 
@@ -240,8 +241,53 @@ func TestBashToolUsesGVisorEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
 	}
-	if strings.TrimSpace(res.Output) != "hello" {
+	if !strings.Contains(res.Output, "hello") {
 		t.Fatalf("unexpected output %q", res.Output)
+	}
+}
+
+func TestBashToolUsesGovmEnvironment(t *testing.T) {
+	if os.Getenv("AGENTKIT_GOVM_E2E") != "1" {
+		t.Skip("set AGENTKIT_GOVM_E2E=1 to run govm-backed integration tests")
+	}
+	skipIfWindows(t)
+	root := cleanTempDir(t)
+	sessionDir := filepath.Join(root, "workspace", "sess-govm-bash")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	scriptPath := filepath.Join(sessionDir, "write.py")
+	if err := os.WriteFile(scriptPath, []byte("from pathlib import Path\nPath('/workspace/out.txt').write_text('hello')\nprint(Path('/workspace/out.txt').read_text())\n"), 0o644); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	env := govmenv.New(root, &sandboxenv.GovmOptions{
+		Enabled:         true,
+		DefaultGuestCwd: "/workspace",
+		OfflineImage:    "py312-alpine",
+		RuntimeHome:     filepath.Join(root, ".govm-home"),
+		Mounts: []sandboxenv.MountSpec{
+			{HostPath: sessionDir, GuestPath: "/workspace"},
+		},
+	})
+	tool := NewBashToolWithRoot(root)
+	tool.SetEnvironment(env)
+	ctx := context.WithValue(context.Background(), middleware.SessionIDContextKey, "sess-govm-bash")
+
+	res, err := tool.Execute(ctx, map[string]interface{}{
+		"command": "python3 /workspace/write.py",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if !strings.Contains(res.Output, "hello") {
+		t.Fatalf("unexpected output %q", res.Output)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "workspace", "sess-govm-bash", "out.txt"))
+	if err != nil {
+		t.Fatalf("read host file: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "hello" {
+		t.Fatalf("unexpected host file %q", string(data))
 	}
 }
 

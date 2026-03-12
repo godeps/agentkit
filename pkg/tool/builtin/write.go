@@ -90,7 +90,7 @@ func (w *WriteTool) Execute(ctx context.Context, params map[string]interface{}) 
 		return nil, err
 	}
 
-	if ps != nil && ps.SandboxType == "gvisor" {
+	if isVirtualizedSandboxSession(ps) {
 		if err := w.base.env.WriteFile(ctx, ps, path, []byte(content)); err != nil {
 			return nil, err
 		}

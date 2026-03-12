@@ -40,8 +40,8 @@ func (b *BashTool) StreamExecute(ctx context.Context, params map[string]interfac
 	if err != nil {
 		return nil, err
 	}
-	if ps != nil && ps.SandboxType == "gvisor" {
-		return nil, errors.New("streaming bash is not supported in gvisor mode")
+	if isVirtualizedSandboxSession(ps) {
+		return nil, errors.New("streaming bash is not supported in virtualized sandbox mode")
 	}
 	timeout, err := b.resolveTimeout(params)
 	if err != nil {

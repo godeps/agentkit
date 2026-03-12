@@ -7,6 +7,7 @@ import (
 	"github.com/godeps/agentkit/pkg/config"
 	"github.com/godeps/agentkit/pkg/sandbox"
 	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
+	"github.com/godeps/agentkit/pkg/sandbox/govmenv"
 	"github.com/godeps/agentkit/pkg/sandbox/gvisorenv"
 	"github.com/godeps/agentkit/pkg/sandbox/hostenv"
 )
@@ -80,6 +81,9 @@ func buildSandboxManager(opts Options, settings *config.Settings) (*sandbox.Mana
 }
 
 func buildExecutionEnvironment(opts Options) sandboxenv.ExecutionEnvironment {
+	if opts.Sandbox.Type == "govm" || (opts.Sandbox.Govm != nil && opts.Sandbox.Govm.Enabled) {
+		return govmenv.New(opts.ProjectRoot, opts.Sandbox.Govm)
+	}
 	if opts.Sandbox.Type == "gvisor" || (opts.Sandbox.GVisor != nil && opts.Sandbox.GVisor.Enabled) {
 		return gvisorenv.New(opts.ProjectRoot, opts.Sandbox.GVisor)
 	}

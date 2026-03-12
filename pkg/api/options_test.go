@@ -62,6 +62,24 @@ func TestOptionsFrozenCopiesSlices(t *testing.T) {
 	}
 }
 
+func TestOptionsFrozenCopiesGovmMounts(t *testing.T) {
+	t.Parallel()
+
+	opts := Options{
+		Sandbox: SandboxOptions{
+			AllowedPaths: []string{"/tmp"},
+			Govm: &GovmOptions{
+				Mounts: []MountSpec{{HostPath: "/tmp/out", GuestPath: "/workspace/out"}},
+			},
+		},
+	}
+	frozen := opts.frozen()
+	opts.Sandbox.Govm.Mounts[0].GuestPath = "/mutated"
+	if frozen.Sandbox.Govm.Mounts[0].GuestPath != "/workspace/out" {
+		t.Fatalf("expected frozen govm mounts copy")
+	}
+}
+
 func TestRequestNormalized(t *testing.T) {
 	t.Parallel()
 

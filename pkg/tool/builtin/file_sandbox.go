@@ -53,7 +53,7 @@ func (f *fileSandbox) prepareSession(ctx context.Context) (*sandboxenv.PreparedS
 }
 
 func (f *fileSandbox) resolveGuestPath(raw interface{}, ps *sandboxenv.PreparedSession) (string, error) {
-	if ps == nil || ps.SandboxType != "gvisor" {
+	if !isVirtualizedSandboxSession(ps) {
 		return f.resolvePath(raw)
 	}
 	if raw == nil {
@@ -75,6 +75,10 @@ func (f *fileSandbox) resolveGuestPath(raw interface{}, ps *sandboxenv.PreparedS
 		base = "/workspace"
 	}
 	return filepath.Clean(filepath.Join(base, trimmed)), nil
+}
+
+func isVirtualizedSandboxSession(ps *sandboxenv.PreparedSession) bool {
+	return ps != nil && (ps.SandboxType == "gvisor" || ps.SandboxType == "govm")
 }
 
 func (f *fileSandbox) resolvePath(raw interface{}) (string, error) {

@@ -122,7 +122,7 @@ func (r *ReadTool) Execute(ctx context.Context, params map[string]interface{}) (
 	}
 
 	var content string
-	if ps != nil && ps.SandboxType == "gvisor" {
+	if isVirtualizedSandboxSession(ps) {
 		data, err := r.base.env.ReadFile(ctx, ps, path)
 		if err != nil {
 			return nil, err

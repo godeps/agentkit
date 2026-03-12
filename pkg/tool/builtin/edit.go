@@ -120,7 +120,7 @@ func (e *EditTool) Execute(ctx context.Context, params map[string]interface{}) (
 		content string
 		info    os.FileInfo
 	)
-	if ps != nil && ps.SandboxType == "gvisor" {
+	if isVirtualizedSandboxSession(ps) {
 		data, err := e.base.env.ReadFile(ctx, ps, path)
 		if err != nil {
 			return nil, err
@@ -163,7 +163,7 @@ func (e *EditTool) Execute(ctx context.Context, params map[string]interface{}) (
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if ps != nil && ps.SandboxType == "gvisor" {
+	if isVirtualizedSandboxSession(ps) {
 		if err := e.base.env.WriteFile(ctx, ps, path, []byte(updated)); err != nil {
 			return nil, err
 		}

@@ -241,7 +241,7 @@ func (g *GrepTool) Execute(ctx context.Context, params map[string]interface{}) (
 		if err != nil {
 			return nil, err
 		}
-		if ps != nil && ps.SandboxType == "gvisor" {
+		if isVirtualizedSandboxSession(ps) {
 			targetPath := ps.GuestCwd
 			if raw, ok := params["path"]; ok && raw != nil {
 				value, err := coerceString(raw)
