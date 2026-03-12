@@ -6,6 +6,9 @@ import (
 	"testing"
 
 	"github.com/godeps/agentkit/pkg/model"
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
+	"github.com/godeps/agentkit/pkg/sandbox/hostenv"
+	toolbuiltin "github.com/godeps/agentkit/pkg/tool/builtin"
 )
 
 func TestEnabledBuiltinToolKeys(t *testing.T) {
@@ -84,5 +87,53 @@ func TestRuntimeAvailableToolsForWhitelist(t *testing.T) {
 	defs := rt.AvailableToolsForWhitelist([]string{"TaskCreate"})
 	if len(defs) != 1 || defs[0].Name != "TaskCreate" {
 		t.Fatalf("unexpected whitelisted defs: %+v", defs)
+	}
+}
+
+func TestBuiltinFactoriesInjectExecutionEnvironment(t *testing.T) {
+	root := t.TempDir()
+	execEnv := hostenv.New(root)
+	factories := builtinToolFactories(root, false, EntryPointCLI, nil, nil, nil, nil, execEnv)
+
+	for name, wantType := range map[string]any{
+		"file_read":  &toolbuiltin.ReadTool{},
+		"file_write": &toolbuiltin.WriteTool{},
+		"file_edit":  &toolbuiltin.EditTool{},
+	} {
+		impl := factories[name]()
+		switch wantType.(type) {
+		case *toolbuiltin.ReadTool:
+			read, ok := impl.(*toolbuiltin.ReadTool)
+			if !ok || read == nil {
+				t.Fatalf("%s: unexpected tool type %T", name, impl)
+			}
+			read.SetEnvironment(execEnv)
+		case *toolbuiltin.WriteTool:
+			write, ok := impl.(*toolbuiltin.WriteTool)
+			if !ok || write == nil {
+				t.Fatalf("%s: unexpected tool type %T", name, impl)
+			}
+			write.SetEnvironment(execEnv)
+		case *toolbuiltin.EditTool:
+			edit, ok := impl.(*toolbuiltin.EditTool)
+			if !ok || edit == nil {
+				t.Fatalf("%s: unexpected tool type %T", name, impl)
+			}
+			edit.SetEnvironment(execEnv)
+		}
+	}
+}
+
+func TestBuildExecutionEnvironmentSelectsConfiguredType(t *testing.T) {
+	root := t.TempDir()
+	env := buildExecutionEnvironment(Options{
+		ProjectRoot: root,
+		Sandbox: SandboxOptions{
+			Type:   "gvisor",
+			GVisor: &sandboxenv.GVisorOptions{Enabled: true},
+		},
+	})
+	if env == nil {
+		t.Fatal("expected non-nil execution environment")
 	}
 }
