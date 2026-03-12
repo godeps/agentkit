@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/godeps/agentkit/pkg/gitignore"
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
 	"github.com/godeps/agentkit/pkg/security"
 	"github.com/godeps/agentkit/pkg/tool"
 )
@@ -117,6 +119,7 @@ type GrepTool struct {
 	maxContext       int
 	respectGitignore bool
 	gitignoreMatcher *gitignore.Matcher
+	env              sandboxenv.ExecutionEnvironment
 }
 
 // NewGrepTool builds a GrepTool rooted at the current directory.
@@ -161,6 +164,12 @@ func (g *GrepTool) Name() string { return "Grep" }
 func (g *GrepTool) Description() string { return grepToolDesc }
 
 func (g *GrepTool) Schema() *tool.JSONSchema { return grepSchema }
+
+func (g *GrepTool) SetEnvironment(env sandboxenv.ExecutionEnvironment) {
+	if g != nil {
+		g.env = env
+	}
+}
 
 func (g *GrepTool) Execute(ctx context.Context, params map[string]interface{}) (*tool.ToolResult, error) {
 	if ctx == nil {
@@ -223,6 +232,75 @@ func (g *GrepTool) Execute(ctx context.Context, params map[string]interface{}) (
 	multiline, _, err := parseBoolParam(params, "multiline")
 	if err != nil {
 		return nil, err
+	}
+	if g.env != nil {
+		ps, err := g.env.PrepareSession(ctx, sandboxenv.SessionContext{
+			SessionID:   bashSessionID(ctx),
+			ProjectRoot: g.root,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if ps != nil && ps.SandboxType == "gvisor" {
+			targetPath := ps.GuestCwd
+			if raw, ok := params["path"]; ok && raw != nil {
+				value, err := coerceString(raw)
+				if err != nil {
+					return nil, fmt.Errorf("path must be string: %w", err)
+				}
+				value = strings.TrimSpace(value)
+				if value != "" {
+					if filepath.IsAbs(value) {
+						targetPath = filepath.Clean(value)
+					} else {
+						targetPath = filepath.Clean(filepath.Join(ps.GuestCwd, value))
+					}
+				}
+			}
+			matches, err := g.env.Grep(ctx, ps, sandboxenv.GrepRequest{
+				Pattern: patternWithFlagsForEnv(pattern, caseInsensitive, multiline),
+				Path:    targetPath,
+			})
+			if err != nil {
+				return nil, err
+			}
+			toolMatches := make([]GrepMatch, 0, len(matches))
+			for _, match := range matches {
+				toolMatches = append(toolMatches, GrepMatch{
+					File:  match.Path,
+					Line:  match.Line,
+					Match: match.Preview,
+				})
+			}
+			formatted := formatGrepOutput(outputMode, toolMatches, showLineNumbers, headLimit, offset, false)
+			data := map[string]interface{}{
+				"pattern":          pattern,
+				"compiled_pattern": patternWithFlagsForEnv(pattern, caseInsensitive, multiline),
+				"path":             targetPath,
+				"matches":          formatted.matches,
+				"count":            len(toolMatches),
+				"display_count":    formatted.displayCount,
+				"total_matches":    len(toolMatches),
+				"output_mode":      outputMode,
+				"head_limit":       headLimit,
+				"offset":           offset,
+				"before_context":   beforeCtx,
+				"after_context":    afterCtx,
+				"line_numbers":     showLineNumbers,
+				"case_insensitive": caseInsensitive,
+				"multiline":        multiline,
+				"glob":             glob,
+				"type":             fileType,
+				"truncated":        formatted.truncated,
+			}
+			if len(formatted.files) > 0 {
+				data["files"] = formatted.files
+			}
+			if len(formatted.counts) > 0 {
+				data["counts"] = formatted.counts
+			}
+			return &tool.ToolResult{Success: true, Output: formatted.output, Data: data}, nil
+		}
 	}
 
 	targetPath, info, err := g.resolveSearchPath(params)
@@ -304,4 +382,8 @@ func (g *GrepTool) Execute(ctx context.Context, params map[string]interface{}) (
 		Output:  formatted.output,
 		Data:    data,
 	}, nil
+}
+
+func patternWithFlagsForEnv(pattern string, caseInsensitive, multiline bool) string {
+	return applyRegexFlags(pattern, caseInsensitive, multiline)
 }

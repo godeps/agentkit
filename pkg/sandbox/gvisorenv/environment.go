@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
@@ -88,12 +89,68 @@ func (e *Environment) EditFile(ctx context.Context, ps *sandboxenv.PreparedSessi
 	return e.WriteFile(ctx, ps, req.Path, []byte(content))
 }
 
-func (e *Environment) Glob(context.Context, *sandboxenv.PreparedSession, string) ([]string, error) {
-	return nil, errGVisorNotImplemented
-}
-
-func (e *Environment) Grep(context.Context, *sandboxenv.PreparedSession, sandboxenv.GrepRequest) ([]sandboxenv.GrepMatch, error) {
-	return nil, errGVisorNotImplemented
+func (e *Environment) Grep(ctx context.Context, ps *sandboxenv.PreparedSession, req sandboxenv.GrepRequest) ([]sandboxenv.GrepMatch, error) {
+	mapper, err := mapperFromPreparedSession(ps)
+	if err != nil {
+		return nil, err
+	}
+	re, err := regexp.Compile(req.Pattern)
+	if err != nil {
+		return nil, fmt.Errorf("gvisorenv: compile grep pattern: %w", err)
+	}
+	var matches []sandboxenv.GrepMatch
+	for _, root := range mapper.VisibleRoots() {
+		if !withinGuestRoot(req.Path, root) {
+			continue
+		}
+		hostRoot, mount, err := mapper.GuestToHost(root)
+		if err != nil {
+			return nil, err
+		}
+		info, err := os.Stat(hostRoot)
+		if err != nil {
+			return nil, fmt.Errorf("gvisorenv: stat grep root: %w", err)
+		}
+		if !info.IsDir() {
+			continue
+		}
+		walkErr := filepath.Walk(hostRoot, func(hostPath string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			guestPath := filepath.Join(mount.GuestPath, strings.TrimPrefix(strings.TrimPrefix(hostPath, hostRoot), string(filepath.Separator)))
+			if req.Path != "" && !withinGuestRoot(guestPath, req.Path) {
+				return nil
+			}
+			data, err := os.ReadFile(hostPath)
+			if err != nil {
+				return fmt.Errorf("gvisorenv: read grep file: %w", err)
+			}
+			lines := strings.Split(string(data), "\n")
+			for i, line := range lines {
+				if !re.MatchString(line) {
+					continue
+				}
+				matches = append(matches, sandboxenv.GrepMatch{
+					Path:    filepath.Clean(guestPath),
+					Line:    i + 1,
+					Column:  1,
+					Preview: strings.TrimRight(line, "\r"),
+				})
+			}
+			return nil
+		})
+		if walkErr != nil {
+			return nil, walkErr
+		}
+	}
+	return matches, nil
 }
 
 func (e *Environment) CloseSession(context.Context, *sandboxenv.PreparedSession) error {
@@ -113,4 +170,58 @@ func mapperFromPreparedSession(ps *sandboxenv.PreparedSession) (*pathmap.Mapper,
 		return nil, errors.New("gvisorenv: invalid path mapper")
 	}
 	return mapper, nil
+}
+
+func (e *Environment) Glob(ctx context.Context, ps *sandboxenv.PreparedSession, pattern string) ([]string, error) {
+	mapper, err := mapperFromPreparedSession(ps)
+	if err != nil {
+		return nil, err
+	}
+	pattern = filepath.Clean(pattern)
+	var matches []string
+	for _, root := range mapper.VisibleRoots() {
+		hostRoot, mount, err := mapper.GuestToHost(root)
+		if err != nil {
+			return nil, err
+		}
+		info, err := os.Stat(hostRoot)
+		if err != nil {
+			return nil, fmt.Errorf("gvisorenv: stat glob root: %w", err)
+		}
+		if !info.IsDir() {
+			continue
+		}
+		walkErr := filepath.Walk(hostRoot, func(hostPath string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			guestPath := mount.GuestPath
+			if hostPath != hostRoot {
+				guestPath = filepath.Join(mount.GuestPath, strings.TrimPrefix(strings.TrimPrefix(hostPath, hostRoot), string(filepath.Separator)))
+			}
+			guestPath = filepath.Clean(guestPath)
+			ok, err := filepath.Match(pattern, guestPath)
+			if err == nil && ok {
+				matches = append(matches, guestPath)
+			}
+			return nil
+		})
+		if walkErr != nil {
+			return nil, walkErr
+		}
+	}
+	return matches, nil
+}
+
+func withinGuestRoot(path, root string) bool {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return true
+	}
+	path = filepath.Clean(path)
+	root = filepath.Clean(root)
+	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
 }
