@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/godeps/agentkit/pkg/gitignore"
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
 	"github.com/godeps/agentkit/pkg/security"
 	"github.com/godeps/agentkit/pkg/tool"
 )
@@ -47,6 +48,7 @@ type GlobTool struct {
 	maxResults       int
 	respectGitignore bool
 	gitignoreMatcher *gitignore.Matcher
+	env              sandboxenv.ExecutionEnvironment
 }
 
 // NewGlobTool builds a GlobTool rooted at the current directory.
@@ -88,6 +90,12 @@ func (g *GlobTool) Description() string { return globToolDesc }
 
 func (g *GlobTool) Schema() *tool.JSONSchema { return globSchema }
 
+func (g *GlobTool) SetEnvironment(env sandboxenv.ExecutionEnvironment) {
+	if g != nil {
+		g.env = env
+	}
+}
+
 func (g *GlobTool) Execute(ctx context.Context, params map[string]interface{}) (*tool.ToolResult, error) {
 	if ctx == nil {
 		return nil, errors.New("context is nil")
@@ -99,6 +107,41 @@ func (g *GlobTool) Execute(ctx context.Context, params map[string]interface{}) (
 	pattern, err := parseGlobPattern(params)
 	if err != nil {
 		return nil, err
+	}
+	if g.env != nil {
+		ps, err := g.env.PrepareSession(ctx, sandboxenv.SessionContext{
+			SessionID:   bashSessionID(ctx),
+			ProjectRoot: g.root,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if ps != nil && ps.SandboxType == "gvisor" {
+			if !filepath.IsAbs(pattern) {
+				pattern = filepath.Join(ps.GuestCwd, pattern)
+			}
+			pattern = filepath.Clean(pattern)
+			matches, err := g.env.Glob(ctx, ps, pattern)
+			if err != nil {
+				return nil, err
+			}
+			truncated := false
+			if len(matches) > g.maxResults {
+				matches = matches[:g.maxResults]
+				truncated = true
+			}
+			return &tool.ToolResult{
+				Success: true,
+				Output:  formatGlobOutput(matches, truncated),
+				Data: map[string]interface{}{
+					"pattern":   pattern,
+					"path":      ps.GuestCwd,
+					"matches":   matches,
+					"count":     len(matches),
+					"truncated": truncated,
+				},
+			}, nil
+		}
 	}
 	dir, err := g.resolveDir(params)
 	if err != nil {

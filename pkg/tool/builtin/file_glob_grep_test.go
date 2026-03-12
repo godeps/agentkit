@@ -7,6 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/godeps/agentkit/pkg/middleware"
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
+	"github.com/godeps/agentkit/pkg/sandbox/gvisorenv"
 )
 
 func TestGlobToolListsMatches(t *testing.T) {
@@ -322,5 +326,68 @@ func TestGrepToolDisableGitignore(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "debug.log") {
 		t.Errorf("Expected debug.log in output when gitignore disabled: %s", res.Output)
+	}
+}
+
+func TestGlobToolUsesGuestPathWithGVisorEnvironment(t *testing.T) {
+	skipIfWindows(t)
+	root := cleanTempDir(t)
+	sessionPath := filepath.Join(root, "workspace", "sess-gv-glob")
+	if err := os.MkdirAll(sessionPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionPath, "main.go"), []byte("package main"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionPath, "keep.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := gvisorenv.New(root, &sandboxenv.GVisorOptions{
+		Enabled:                    true,
+		AutoCreateSessionWorkspace: true,
+		SessionWorkspaceBase:       filepath.Join(root, "workspace"),
+	})
+	tool := NewGlobToolWithRoot(root)
+	tool.SetEnvironment(env)
+
+	ctx := context.WithValue(context.Background(), middleware.SessionIDContextKey, "sess-gv-glob")
+	res, err := tool.Execute(ctx, map[string]any{"pattern": "*.go"})
+	if err != nil {
+		t.Fatalf("glob failed: %v", err)
+	}
+	if !strings.Contains(res.Output, "/workspace/main.go") {
+		t.Fatalf("expected guest path in output: %s", res.Output)
+	}
+}
+
+func TestGrepToolUsesGuestPathWithGVisorEnvironment(t *testing.T) {
+	skipIfWindows(t)
+	root := cleanTempDir(t)
+	sessionPath := filepath.Join(root, "workspace", "sess-gv-grep")
+	if err := os.MkdirAll(sessionPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionPath, "main.go"), []byte("hello gvisor"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := gvisorenv.New(root, &sandboxenv.GVisorOptions{
+		Enabled:                    true,
+		AutoCreateSessionWorkspace: true,
+		SessionWorkspaceBase:       filepath.Join(root, "workspace"),
+	})
+	tool := NewGrepToolWithRoot(root)
+	tool.SetEnvironment(env)
+
+	ctx := context.WithValue(context.Background(), middleware.SessionIDContextKey, "sess-gv-grep")
+	res, err := tool.Execute(ctx, map[string]any{
+		"pattern":     "gvisor",
+		"path":        "/workspace",
+		"output_mode": "files_with_matches",
+	})
+	if err != nil {
+		t.Fatalf("grep failed: %v", err)
+	}
+	if !strings.Contains(res.Output, "/workspace/main.go") {
+		t.Fatalf("expected guest path in output: %s", res.Output)
 	}
 }

@@ -1646,22 +1646,24 @@ func builtinToolFactories(root string, sandboxDisabled bool, entry EntryPoint, s
 		respectGitignore = *settings.RespectGitignore
 	}
 	grepCtor := func() tool.Tool {
+		var grep *toolbuiltin.GrepTool
 		if sandboxDisabled {
-			grep := toolbuiltin.NewGrepToolWithSandbox(root, security.NewDisabledSandbox())
-			grep.SetRespectGitignore(respectGitignore)
-			return grep
+			grep = toolbuiltin.NewGrepToolWithSandbox(root, security.NewDisabledSandbox())
+		} else {
+			grep = toolbuiltin.NewGrepToolWithRoot(root)
 		}
-		grep := toolbuiltin.NewGrepToolWithRoot(root)
+		grep.SetEnvironment(execEnv)
 		grep.SetRespectGitignore(respectGitignore)
 		return grep
 	}
 	globCtor := func() tool.Tool {
+		var glob *toolbuiltin.GlobTool
 		if sandboxDisabled {
-			glob := toolbuiltin.NewGlobToolWithSandbox(root, security.NewDisabledSandbox())
-			glob.SetRespectGitignore(respectGitignore)
-			return glob
+			glob = toolbuiltin.NewGlobToolWithSandbox(root, security.NewDisabledSandbox())
+		} else {
+			glob = toolbuiltin.NewGlobToolWithRoot(root)
 		}
-		glob := toolbuiltin.NewGlobToolWithRoot(root)
+		glob.SetEnvironment(execEnv)
 		glob.SetRespectGitignore(respectGitignore)
 		return glob
 	}
