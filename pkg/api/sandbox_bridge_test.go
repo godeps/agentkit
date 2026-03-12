@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/godeps/agentkit/pkg/config"
+	"github.com/godeps/agentkit/pkg/sandbox/gvisorenv"
+	"github.com/godeps/agentkit/pkg/sandbox/hostenv"
 )
 
 func TestAdditionalSandboxPathsHandlesNilAndDedup(t *testing.T) {
@@ -99,5 +101,27 @@ func TestNoopFileSystemPolicyRootsAndAllow(t *testing.T) {
 	}
 	if roots := (&noopFileSystemPolicy{root: "   "}).Roots(); roots != nil {
 		t.Fatalf("expected nil roots for blank root, got %+v", roots)
+	}
+}
+
+func TestBuildExecutionEnvironmentDefaultsToHost(t *testing.T) {
+	root := t.TempDir()
+	env := buildExecutionEnvironment(Options{ProjectRoot: root})
+	if _, ok := env.(*hostenv.Environment); !ok {
+		t.Fatalf("expected host environment, got %T", env)
+	}
+}
+
+func TestBuildExecutionEnvironmentSelectsGVisor(t *testing.T) {
+	root := t.TempDir()
+	env := buildExecutionEnvironment(Options{
+		ProjectRoot: root,
+		Sandbox: SandboxOptions{
+			Type:   "gvisor",
+			GVisor: &GVisorOptions{Enabled: true},
+		},
+	})
+	if _, ok := env.(*gvisorenv.Environment); !ok {
+		t.Fatalf("expected gvisor environment, got %T", env)
 	}
 }

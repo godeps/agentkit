@@ -24,6 +24,7 @@ import (
 	"github.com/godeps/agentkit/pkg/runtime/subagents"
 	"github.com/godeps/agentkit/pkg/runtime/tasks"
 	"github.com/godeps/agentkit/pkg/sandbox"
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
 	"github.com/godeps/agentkit/pkg/security"
 	"github.com/godeps/agentkit/pkg/tool"
 	toolbuiltin "github.com/godeps/agentkit/pkg/tool/builtin"
@@ -63,6 +64,7 @@ type Runtime struct {
 	fs          *config.FS
 	rulesLoader *config.RulesLoader
 	sandbox     *sandbox.Manager
+	execEnv     sandboxenv.ExecutionEnvironment
 	sbRoot      string
 	registry    *tool.Registry
 	executor    *tool.Executor
@@ -128,6 +130,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	opts.Model = mdl
 
 	sbox, sbRoot := buildSandboxManager(opts, settings)
+	execEnv := buildExecutionEnvironment(opts)
 	cmdExec, cmdErrs := buildCommandsExecutor(opts)
 	if len(cmdErrs) > 0 {
 		for _, err := range cmdErrs {
@@ -207,6 +210,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		fs:               fsLayer,
 		rulesLoader:      rulesLoader,
 		sandbox:          sbox,
+		execEnv:          execEnv,
 		sbRoot:           sbRoot,
 		registry:         registry,
 		executor:         executor,
