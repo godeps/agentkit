@@ -6,6 +6,9 @@ import (
 
 	"github.com/godeps/agentkit/pkg/config"
 	"github.com/godeps/agentkit/pkg/sandbox"
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
+	"github.com/godeps/agentkit/pkg/sandbox/gvisorenv"
+	"github.com/godeps/agentkit/pkg/sandbox/hostenv"
 )
 
 type noopFileSystemPolicy struct {
@@ -74,6 +77,13 @@ func buildSandboxManager(opts Options, settings *config.Settings) (*sandbox.Mana
 
 	nw := sandbox.NewDomainAllowList(netAllow...)
 	return sandbox.NewManager(fs, nw, sandbox.NewResourceLimiter(opts.Sandbox.ResourceLimit)), root
+}
+
+func buildExecutionEnvironment(opts Options) sandboxenv.ExecutionEnvironment {
+	if opts.Sandbox.Type == "gvisor" || (opts.Sandbox.GVisor != nil && opts.Sandbox.GVisor.Enabled) {
+		return gvisorenv.New(opts.ProjectRoot)
+	}
+	return hostenv.New(opts.ProjectRoot)
 }
 
 func additionalSandboxPaths(settings *config.Settings) []string {
