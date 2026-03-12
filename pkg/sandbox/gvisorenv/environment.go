@@ -53,6 +53,8 @@ func (e *Environment) RunCommand(ctx context.Context, ps *sandboxenv.PreparedSes
 		GuestCwd:  hostCwd,
 		TimeoutMs: req.Timeout.Milliseconds(),
 		Env:       req.Env,
+		Mounts:    mountsFromPreparedSession(ps),
+		Network:   "none",
 	}, e.helperFlag())
 	if err != nil {
 		return nil, err
@@ -75,6 +77,21 @@ func (e *Environment) helperFlag() string {
 		return "--agentkit-gvisor-helper"
 	}
 	return e.gvisor.HelperModeFlag
+}
+
+func mountsFromPreparedSession(ps *sandboxenv.PreparedSession) []sandboxenv.MountSpec {
+	if ps == nil || ps.Meta == nil {
+		return nil
+	}
+	raw, ok := ps.Meta["mounts"]
+	if !ok || raw == nil {
+		return nil
+	}
+	mounts, ok := raw.([]sandboxenv.MountSpec)
+	if !ok {
+		return nil
+	}
+	return append([]sandboxenv.MountSpec(nil), mounts...)
 }
 
 func (e *Environment) ReadFile(_ context.Context, ps *sandboxenv.PreparedSession, path string) ([]byte, error) {

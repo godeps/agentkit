@@ -46,6 +46,7 @@ func prepareSession(_ context.Context, projectRoot string, gv *sandboxenv.GVisor
 		Meta: map[string]any{
 			"project_root": projectRoot,
 			"mount_count":  len(mounts),
+			"mounts":       append([]sandboxenv.MountSpec(nil), mounts...),
 			"path_mapper":  mapper,
 		},
 	}

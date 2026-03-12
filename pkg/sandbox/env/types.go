@@ -84,8 +84,8 @@ type GVisorOptions struct {
 
 // MountSpec describes one host-to-guest filesystem exposure.
 type MountSpec struct {
-	HostPath        string
-	GuestPath       string
-	ReadOnly        bool
-	CreateIfMissing bool
+	HostPath        string `json:"host_path"`
+	GuestPath       string `json:"guest_path"`
+	ReadOnly        bool   `json:"read_only"`
+	CreateIfMissing bool   `json:"create_if_missing"`
 }

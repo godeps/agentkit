@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const envRunscMode = "AGENTKIT_GVISOR_RUNSC"
+
 // Run executes one helper request from stdin and writes a response to stdout.
 func Run(ctx context.Context, stdin io.Reader, stdout io.Writer, _ io.Writer) error {
 	var req Request
@@ -32,10 +34,10 @@ func Run(ctx context.Context, stdin io.Reader, stdout io.Writer, _ io.Writer) er
 func Invoke(ctx context.Context, req Request, helperFlag string) (Response, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return ExecuteRequest(ctx, req), nil
+		return executeHostFallback(ctx, req), nil
 	}
 	if strings.HasSuffix(filepath.Base(exe), ".test") {
-		return ExecuteRequest(ctx, req), nil
+		return executeHostFallback(ctx, req), nil
 	}
 	if strings.TrimSpace(helperFlag) == "" {
 		helperFlag = "--agentkit-gvisor-helper"
@@ -72,6 +74,13 @@ func Invoke(ctx context.Context, req Request, helperFlag string) (Response, erro
 }
 
 func ExecuteRequest(ctx context.Context, req Request) Response {
+	if len(req.Mounts) == 0 {
+		return executeHostFallback(ctx, req)
+	}
+	return executeGVisorRequest(ctx, req)
+}
+
+func executeHostFallback(ctx context.Context, req Request) Response {
 	execCtx := ctx
 	cancel := func() {}
 	if req.TimeoutMs > 0 {

@@ -204,3 +204,44 @@ func TestRunGVisorHelperMode(t *testing.T) {
 		t.Fatalf("unexpected helper stdout: %s", stdout.String())
 	}
 }
+
+func TestRunGVisorRunscMode(t *testing.T) {
+	orig := runGVisorRunsc
+	t.Cleanup(func() {
+		runGVisorRunsc = orig
+	})
+	called := false
+	runGVisorRunsc = func() error {
+		called = true
+		return nil
+	}
+
+	if err := run([]string{"--agentkit-gvisor-runsc"}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("run runsc mode: %v", err)
+	}
+	if !called {
+		t.Fatalf("expected runsc path to be called")
+	}
+}
+
+func TestRunGVisorRunscModeByArgv0(t *testing.T) {
+	orig := runGVisorRunsc
+	origArgv0 := os.Args[0]
+	t.Cleanup(func() {
+		runGVisorRunsc = orig
+		os.Args[0] = origArgv0
+	})
+	called := false
+	runGVisorRunsc = func() error {
+		called = true
+		return nil
+	}
+	os.Args[0] = "runsc-gofer"
+
+	if err := run([]string{"--root=/tmp/state", "gofer"}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("run argv0 runsc mode: %v", err)
+	}
+	if !called {
+		t.Fatalf("expected runsc argv0 path to be called")
+	}
+}

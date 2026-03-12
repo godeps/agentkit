@@ -19,6 +19,7 @@ import (
 	"github.com/godeps/agentkit/pkg/clikit"
 	modelpkg "github.com/godeps/agentkit/pkg/model"
 	"github.com/godeps/agentkit/pkg/sandbox/gvisorhelper"
+	"github.com/godeps/agentkit/pkg/sandbox/gvisorruntime"
 )
 
 var serveACPStdio = acpserver.ServeStdio
@@ -28,6 +29,7 @@ var runtimeFactory = func(ctx context.Context, opts api.Options) (runtimeClient,
 var clikitRunStream = clikit.RunStream
 var clikitRunREPL = clikit.RunREPL
 var runGVisorHelper = gvisorhelper.Run
+var runGVisorRunsc = gvisorruntime.Run
 
 type runtimeClient interface {
 	Run(context.Context, api.Request) (*api.Response, error)
@@ -46,6 +48,10 @@ func main() {
 }
 
 func run(argv []string, stdout, stderr io.Writer) error {
+	if shouldRunGVisorRunsc(argv) {
+		return runGVisorRunsc()
+	}
+
 	flags := flag.NewFlagSet("agentsdk-cli", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
@@ -64,6 +70,7 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	streamFormat := flags.String("stream-format", "json", "Streaming output format: json|rendered")
 	repl := flags.Bool("repl", false, "Run interactive REPL mode")
 	gvisorHelper := flags.Bool("agentkit-gvisor-helper", false, "Run hidden gVisor helper mode")
+	gvisorRunsc := flags.Bool("agentkit-gvisor-runsc", false, "Run hidden gVisor runsc mode")
 	verbose := flags.Bool("verbose", false, "Verbose stream diagnostics")
 	waterfall := flags.String("waterfall", clikit.WaterfallModeFull, "Waterfall output mode: off|summary|full")
 	skillsRecursive := flags.Bool("skills-recursive", true, "Discover SKILL.md recursively")
@@ -79,6 +86,9 @@ func run(argv []string, stdout, stderr io.Writer) error {
 
 	if err := flags.Parse(argv); err != nil {
 		return err
+	}
+	if *gvisorRunsc {
+		return runGVisorRunsc()
 	}
 	if *gvisorHelper {
 		return runGVisorHelper(context.Background(), os.Stdin, stdout, stderr)
@@ -197,6 +207,22 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	}
 	printResponse(resp, stdout)
 	return nil
+}
+
+func shouldRunGVisorRunsc(argv []string) bool {
+	if strings.TrimSpace(os.Getenv("AGENTKIT_GVISOR_RUNSC")) != "" {
+		return true
+	}
+	base := filepath.Base(strings.TrimSpace(os.Args[0]))
+	if strings.HasPrefix(base, "runsc-") || base == "runsc" {
+		return true
+	}
+	for _, arg := range argv {
+		if arg == "--agentkit-gvisor-runsc" {
+			return true
+		}
+	}
+	return false
 }
 
 func resolvePrompt(literal, file string, tail []string) (string, error) {
