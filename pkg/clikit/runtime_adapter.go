@@ -17,6 +17,7 @@ type RuntimeAdapterConfig struct {
 	ProjectRoot     string
 	ConfigRoot      string
 	ModelName       string
+	SandboxBackend  string
 	SkillsDirs      []string
 	SkillsRecursive *bool
 	TurnRecorder    *api.ModelTurnRecorder
@@ -27,6 +28,7 @@ type RuntimeAdapter struct {
 	projectRoot     string
 	configRoot      string
 	modelName       string
+	sandboxBackend  string
 	skillsDirs      []string
 	skillsRecursive bool
 	turnRecorder    *api.ModelTurnRecorder
@@ -56,6 +58,7 @@ func NewRuntimeAdapter(rt streamRuntime, cfg RuntimeAdapterConfig) *RuntimeAdapt
 		projectRoot:     strings.TrimSpace(cfg.ProjectRoot),
 		configRoot:      strings.TrimSpace(cfg.ConfigRoot),
 		modelName:       strings.TrimSpace(cfg.ModelName),
+		sandboxBackend:  strings.TrimSpace(cfg.SandboxBackend),
 		skillsDirs:      append([]string(nil), cfg.SkillsDirs...),
 		skillsRecursive: cfg.SkillsRecursive == nil || *cfg.SkillsRecursive,
 		turnRecorder:    recorder,
@@ -165,4 +168,11 @@ func (a *RuntimeAdapter) Skills() []SkillMeta {
 		out = append(out, SkillMeta{Name: name})
 	}
 	return out
+}
+
+func (a *RuntimeAdapter) SandboxBackend() string {
+	if a == nil {
+		return ""
+	}
+	return a.sandboxBackend
 }

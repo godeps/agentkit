@@ -15,7 +15,7 @@ func prepareSession(_ context.Context, projectRoot string, gv *sandboxenv.GovmOp
 		return nil, nil, nil, fmt.Errorf("govmenv: missing govm config")
 	}
 	mounts := append([]sandboxenv.MountSpec(nil), gv.Mounts...)
-	if len(mounts) == 0 && gv.AutoCreateSessionWorkspace {
+	if gv.AutoCreateSessionWorkspace && !hasGuestMount(mounts, "/workspace") {
 		base := gv.SessionWorkspaceBase
 		if base == "" {
 			base = filepath.Join(projectRoot, "workspace")
@@ -50,4 +50,14 @@ func prepareSession(_ context.Context, projectRoot string, gv *sandboxenv.GovmOp
 		},
 	}
 	return prepared, mapper, mounts, nil
+}
+
+func hasGuestMount(mounts []sandboxenv.MountSpec, guestPath string) bool {
+	guestPath = filepath.Clean(guestPath)
+	for _, mount := range mounts {
+		if filepath.Clean(mount.GuestPath) == guestPath {
+			return true
+		}
+	}
+	return false
 }

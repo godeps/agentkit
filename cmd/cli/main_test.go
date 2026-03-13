@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/godeps/agentkit/pkg/api"
+	govmclient "github.com/godeps/govm/pkg/client"
 )
 
 type fakeRuntime struct {
@@ -60,7 +63,7 @@ func TestRunACPModeNoPrompt(t *testing.T) {
 	}
 }
 
-func TestRunNonACPModeWithoutPromptErrors(t *testing.T) {
+func TestRunNonACPModeWithoutPromptDefaultsToInteractiveShell(t *testing.T) {
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {
 		t.Fatalf("open %s: %v", os.DevNull, err)
@@ -73,12 +76,27 @@ func TestRunNonACPModeWithoutPromptErrors(t *testing.T) {
 		os.Stdin = originalStdin
 	})
 
-	err = run(nil, io.Discard, io.Discard)
-	if err == nil {
-		t.Fatalf("expected error when no prompt is provided in non-ACP mode")
+	origFactory := runtimeFactory
+	origRunInteractive := clikitRunInteractiveShell
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+		clikitRunInteractiveShell = origRunInteractive
+	})
+	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
+		return &fakeRuntime{}, nil
 	}
-	if !strings.Contains(strings.ToLower(err.Error()), "prompt") {
-		t.Fatalf("expected prompt-related error, got: %v", err)
+	called := false
+	clikitRunInteractiveShell = func(ctx context.Context, in io.ReadCloser, out, errOut io.Writer, eng replEngine, timeoutMs int, verbose bool, waterfallMode string, initialSessionID string) error {
+		called = true
+		return nil
+	}
+
+	err = run(nil, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("expected interactive shell fallback, got: %v", err)
+	}
+	if !called {
+		t.Fatal("expected interactive shell to be called")
 	}
 }
 
@@ -160,17 +178,18 @@ func TestRunStreamJSONRemainsMachineReadableByDefault(t *testing.T) {
 
 func TestCLIReplUsesSharedBannerAndCommandLoop(t *testing.T) {
 	origFactory := runtimeFactory
-	origRunREPL := clikitRunREPL
+	origRunInteractive := clikitRunInteractiveShell
 	t.Cleanup(func() {
 		runtimeFactory = origFactory
-		clikitRunREPL = origRunREPL
+		clikitRunInteractiveShell = origRunInteractive
 	})
 	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
 		return &fakeRuntime{}, nil
 	}
 	called := false
-	clikitRunREPL = func(ctx context.Context, in io.ReadCloser, out, errOut io.Writer, eng replEngine, timeoutMs int, verbose bool, waterfallMode string, initialSessionID string) {
+	clikitRunInteractiveShell = func(ctx context.Context, in io.ReadCloser, out, errOut io.Writer, eng replEngine, timeoutMs int, verbose bool, waterfallMode string, initialSessionID string) error {
 		called = true
+		return nil
 	}
 
 	if err := run([]string{"--repl"}, io.Discard, io.Discard); err != nil {
@@ -178,6 +197,31 @@ func TestCLIReplUsesSharedBannerAndCommandLoop(t *testing.T) {
 	}
 	if !called {
 		t.Fatalf("expected clikit repl to be called")
+	}
+}
+
+func TestCLIReplUsesInteractiveShell(t *testing.T) {
+	origFactory := runtimeFactory
+	origRunInteractive := clikitRunInteractiveShell
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+		clikitRunInteractiveShell = origRunInteractive
+	})
+	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
+		return &fakeRuntime{}, nil
+	}
+
+	called := false
+	clikitRunInteractiveShell = func(ctx context.Context, in io.ReadCloser, out, errOut io.Writer, eng replEngine, timeoutMs int, verbose bool, waterfallMode string, initialSessionID string) error {
+		called = true
+		return nil
+	}
+
+	if err := run([]string{"--repl"}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !called {
+		t.Fatalf("expected interactive shell to be called")
 	}
 }
 
@@ -202,5 +246,157 @@ func TestRunGVisorHelperMode(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"success":true`) {
 		t.Fatalf("unexpected helper stdout: %s", stdout.String())
+	}
+}
+
+func TestRunBuildsGovmSandboxOptions(t *testing.T) {
+	origFactory := runtimeFactory
+	origGovmCheck := validateGovmRuntime
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+		validateGovmRuntime = origGovmCheck
+	})
+
+	root := t.TempDir()
+	validateGovmRuntime = func(api.GovmOptions) error { return nil }
+
+	var captured api.Options
+	runtimeFactory = func(_ context.Context, opts api.Options) (runtimeClient, error) {
+		captured = opts
+		return &fakeRuntime{
+			runFn: func(_ context.Context, req api.Request) (*api.Response, error) {
+				if req.SessionID == "" {
+					t.Fatal("expected generated session id")
+				}
+				return &api.Response{Mode: api.ModeContext{EntryPoint: api.EntryPointCLI}, Result: &api.Result{Output: "ok"}}, nil
+			},
+		}, nil
+	}
+
+	if err := run([]string{"--project", root, "--prompt", "hi", "--sandbox-backend=govm"}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if captured.Sandbox.Type != "govm" {
+		t.Fatalf("sandbox type = %q", captured.Sandbox.Type)
+	}
+	if captured.Sandbox.Govm == nil || !captured.Sandbox.Govm.Enabled {
+		t.Fatal("expected govm config enabled")
+	}
+	if captured.Sandbox.Govm.RuntimeHome != filepath.Join(root, ".govm") {
+		t.Fatalf("runtime home = %q", captured.Sandbox.Govm.RuntimeHome)
+	}
+	if captured.Sandbox.Govm.OfflineImage != "py312-alpine" {
+		t.Fatalf("offline image = %q", captured.Sandbox.Govm.OfflineImage)
+	}
+	if !captured.Sandbox.Govm.AutoCreateSessionWorkspace {
+		t.Fatal("expected auto session workspace enabled")
+	}
+	if captured.Sandbox.Govm.SessionWorkspaceBase != filepath.Join(root, "workspace") {
+		t.Fatalf("workspace base = %q", captured.Sandbox.Govm.SessionWorkspaceBase)
+	}
+	if len(captured.Sandbox.Govm.Mounts) != 1 {
+		t.Fatalf("expected one project mount, got %+v", captured.Sandbox.Govm.Mounts)
+	}
+	mount := captured.Sandbox.Govm.Mounts[0]
+	if mount.HostPath != root || mount.GuestPath != "/project" || !mount.ReadOnly {
+		t.Fatalf("unexpected project mount %+v", mount)
+	}
+}
+
+func TestRunGovmProjectMountOff(t *testing.T) {
+	origFactory := runtimeFactory
+	origGovmCheck := validateGovmRuntime
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+		validateGovmRuntime = origGovmCheck
+	})
+
+	validateGovmRuntime = func(api.GovmOptions) error { return nil }
+
+	var captured api.Options
+	runtimeFactory = func(_ context.Context, opts api.Options) (runtimeClient, error) {
+		captured = opts
+		return &fakeRuntime{
+			runFn: func(_ context.Context, req api.Request) (*api.Response, error) {
+				return &api.Response{Mode: api.ModeContext{EntryPoint: api.EntryPointCLI}, Result: &api.Result{Output: "ok"}}, nil
+			},
+		}, nil
+	}
+
+	if err := run([]string{"--project", t.TempDir(), "--prompt", "hi", "--sandbox-backend=govm", "--sandbox-project-mount=off"}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if captured.Sandbox.Govm == nil {
+		t.Fatal("expected govm config")
+	}
+	if len(captured.Sandbox.Govm.Mounts) != 0 {
+		t.Fatalf("expected no project mounts, got %+v", captured.Sandbox.Govm.Mounts)
+	}
+}
+
+func TestRunRejectsInvalidSandboxProjectMount(t *testing.T) {
+	err := run([]string{"--prompt", "hi", "--sandbox-backend=govm", "--sandbox-project-mount=invalid"}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "sandbox-project-mount") {
+		t.Fatalf("expected sandbox-project-mount error, got %v", err)
+	}
+}
+
+func TestRunRejectsUnsupportedGovmPlatform(t *testing.T) {
+	origPlatformCheck := validateGovmPlatform
+	t.Cleanup(func() {
+		validateGovmPlatform = origPlatformCheck
+	})
+	validateGovmPlatform = func() error {
+		return errors.New("govm requires linux/amd64, linux/arm64, or darwin/arm64")
+	}
+
+	err := run([]string{"--prompt", "hi", "--sandbox-backend=govm"}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "govm requires") {
+		t.Fatalf("expected govm platform error, got %v", err)
+	}
+}
+
+func TestRunRejectsUnavailableGovmRuntime(t *testing.T) {
+	origPlatformCheck := validateGovmPlatform
+	origGovmCheck := validateGovmRuntime
+	t.Cleanup(func() {
+		validateGovmPlatform = origPlatformCheck
+		validateGovmRuntime = origGovmCheck
+	})
+	validateGovmPlatform = func() error { return nil }
+	validateGovmRuntime = func(api.GovmOptions) error { return govmclient.ErrNativeUnavailable }
+
+	err := run([]string{"--prompt", "hi", "--sandbox-backend=govm"}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "govm native runtime unavailable") {
+		t.Fatalf("expected govm runtime error, got %v", err)
+	}
+}
+
+func TestBuildSandboxOptionsResolvesAbsolutePathsForGovm(t *testing.T) {
+	root := t.TempDir()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(cwd)
+	})
+
+	opts, err := buildSandboxOptions(".", "govm", "ro", "")
+	if err != nil {
+		t.Fatalf("build sandbox options: %v", err)
+	}
+	if opts.Govm == nil {
+		t.Fatal("expected govm options")
+	}
+	if !filepath.IsAbs(opts.Govm.RuntimeHome) {
+		t.Fatalf("expected absolute runtime home, got %q", opts.Govm.RuntimeHome)
+	}
+	if len(opts.Govm.Mounts) != 1 || !filepath.IsAbs(opts.Govm.Mounts[0].HostPath) {
+		t.Fatalf("expected absolute host mount, got %+v", opts.Govm.Mounts)
 	}
 }

@@ -14,6 +14,7 @@ import (
 // These tests live in the skills package to get coverage on lazy-loading internals.
 
 func TestHandlerLazyLoadsOnFirstExecute(t *testing.T) {
+	isolateAgentsSkillsHome(t)
 	root := t.TempDir()
 	dir := filepath.Join(root, ".claude", "skills", "lazy")
 
@@ -52,6 +53,7 @@ func TestHandlerLazyLoadsOnFirstExecute(t *testing.T) {
 }
 
 func TestHandlerCachesLoadResult(t *testing.T) {
+	isolateAgentsSkillsHome(t)
 	root := t.TempDir()
 	dir := filepath.Join(root, ".claude", "skills", "cache")
 	writeSkill(t, filepath.Join(dir, "SKILL.md"), "cache", "cache body")
@@ -79,6 +81,7 @@ func TestHandlerCachesLoadResult(t *testing.T) {
 }
 
 func TestHandlerConcurrentExecuteSingleLoad(t *testing.T) {
+	isolateAgentsSkillsHome(t)
 	root := t.TempDir()
 	dir := filepath.Join(root, ".claude", "skills", "concurrent")
 	writeSkill(t, filepath.Join(dir, "SKILL.md"), "concurrent", "body")
@@ -107,6 +110,7 @@ func TestHandlerConcurrentExecuteSingleLoad(t *testing.T) {
 }
 
 func TestHandlerHotReloadOnFileChange(t *testing.T) {
+	isolateAgentsSkillsHome(t)
 	root := t.TempDir()
 	dir := filepath.Join(root, ".claude", "skills", "hotreload")
 	skillPath := filepath.Join(dir, "SKILL.md")
@@ -145,6 +149,7 @@ func TestHandlerHotReloadOnFileChange(t *testing.T) {
 }
 
 func TestHandlerBodyLengthProbe(t *testing.T) {
+	isolateAgentsSkillsHome(t)
 	root := t.TempDir()
 	dir := filepath.Join(root, ".claude", "skills", "probe")
 	body := "probe body"
@@ -173,6 +178,7 @@ func TestHandlerBodyLengthProbe(t *testing.T) {
 }
 
 func TestHandlerStatError(t *testing.T) {
+	isolateAgentsSkillsHome(t)
 	root := t.TempDir()
 	dir := filepath.Join(root, ".claude", "skills", "staterr")
 	skillPath := filepath.Join(dir, "SKILL.md")

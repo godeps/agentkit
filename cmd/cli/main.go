@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ import (
 	"github.com/godeps/agentkit/pkg/clikit"
 	modelpkg "github.com/godeps/agentkit/pkg/model"
 	"github.com/godeps/agentkit/pkg/sandbox/gvisorhelper"
+	govmclient "github.com/godeps/govm/pkg/client"
+	"github.com/google/uuid"
 )
 
 var serveACPStdio = acpserver.ServeStdio
@@ -27,7 +30,10 @@ var runtimeFactory = func(ctx context.Context, opts api.Options) (runtimeClient,
 }
 var clikitRunStream = clikit.RunStream
 var clikitRunREPL = clikit.RunREPL
+var clikitRunInteractiveShell = clikit.RunInteractiveShell
 var runGVisorHelper = gvisorhelper.Run
+var validateGovmPlatform = defaultValidateGovmPlatform
+var validateGovmRuntime = defaultValidateGovmRuntime
 
 type runtimeClient interface {
 	Run(context.Context, api.Request) (*api.Response, error)
@@ -64,6 +70,9 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	streamFormat := flags.String("stream-format", "json", "Streaming output format: json|rendered")
 	repl := flags.Bool("repl", false, "Run interactive REPL mode")
 	gvisorHelper := flags.Bool("agentkit-gvisor-helper", false, "Run hidden gVisor helper mode")
+	sandboxBackend := flags.String("sandbox-backend", "host", "Sandbox backend: host|gvisor|govm")
+	sandboxProjectMount := flags.String("sandbox-project-mount", "ro", "Project mount mode for virtualized sandbox: ro|rw|off")
+	sandboxImage := flags.String("sandbox-image", "", "Offline image override for govm sandbox")
 	verbose := flags.Bool("verbose", false, "Verbose stream diagnostics")
 	waterfall := flags.String("waterfall", clikit.WaterfallModeFull, "Waterfall output mode: off|summary|full")
 	skillsRecursive := flags.Bool("skills-recursive", true, "Discover SKILL.md recursively")
@@ -93,6 +102,11 @@ func run(argv []string, stdout, stderr io.Writer) error {
 		ModelName: *modelName,
 		System:    *systemPrompt,
 	}
+	selectedBackend := strings.ToLower(strings.TrimSpace(*sandboxBackend))
+	resolvedSessionID := strings.TrimSpace(*sessionID)
+	if selectedBackend != "" && selectedBackend != "host" && resolvedSessionID == "" {
+		resolvedSessionID = uuid.NewString()
+	}
 	settingsPath := ""
 	if strings.TrimSpace(*claudeDir) != "" {
 		settingsPath = filepath.Join(*claudeDir, "settings.json")
@@ -113,6 +127,25 @@ func run(argv []string, stdout, stderr io.Writer) error {
 			v := *skillsRecursive
 			return &v
 		}(),
+	}
+	sandboxOpts, err := buildSandboxOptions(*project, selectedBackend, *sandboxProjectMount, *sandboxImage)
+	if err != nil {
+		return err
+	}
+	options.Sandbox = sandboxOpts
+	if selectedBackend == "govm" {
+		if err := validateGovmPlatform(); err != nil {
+			return err
+		}
+		if options.Sandbox.Govm == nil {
+			return errors.New("govm sandbox configuration is missing")
+		}
+		if err := validateGovmRuntime(*options.Sandbox.Govm); err != nil {
+			if isGovmNativeUnavailable(err) {
+				return fmt.Errorf("govm native runtime unavailable: build with -tags govm_native and ensure bundled native assets are present")
+			}
+			return fmt.Errorf("govm runtime preflight failed: %w", err)
+		}
 	}
 	if *acpMode {
 		return serveACPStdio(context.Background(), options, os.Stdin, stdout)
@@ -137,6 +170,7 @@ func run(argv []string, stdout, stderr io.Writer) error {
 		ProjectRoot:     options.ProjectRoot,
 		ConfigRoot:      finalConfigRoot,
 		ModelName:       *modelName,
+		SandboxBackend:  selectedBackend,
 		SkillsDirs:      append([]string(nil), skillsDirs...),
 		SkillsRecursive: options.SkillsRecursive,
 		TurnRecorder:    recorder,
@@ -145,10 +179,9 @@ func run(argv []string, stdout, stderr io.Writer) error {
 		clikit.PrintRuntimeEffectiveConfig(stderr, adapter, *timeoutMs)
 	}
 
-	if *repl {
+	if *repl || shouldAutoEnterInteractive(*promptLiteral, *promptFile, flags.Args(), *stream, *acpMode) {
 		clikit.PrintBanner(stdout, adapter.ModelName(), adapter.Skills())
-		clikitRunREPL(context.Background(), os.Stdin, stdout, stderr, adapter, *timeoutMs, *verbose, *waterfall, strings.TrimSpace(*sessionID))
-		return nil
+		return clikitRunInteractiveShell(context.Background(), os.Stdin, stdout, stderr, adapter, *timeoutMs, *verbose, *waterfall, resolvedSessionID)
 	}
 
 	prompt, err := resolvePrompt(*promptLiteral, *promptFile, flags.Args())
@@ -170,7 +203,7 @@ func run(argv []string, stdout, stderr io.Writer) error {
 
 	req := api.Request{
 		Prompt:    prompt,
-		SessionID: strings.TrimSpace(*sessionID),
+		SessionID: resolvedSessionID,
 		Mode: api.ModeContext{
 			EntryPoint: options.EntryPoint,
 			CLI: &api.CLIContext{
@@ -197,6 +230,101 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	}
 	printResponse(resp, stdout)
 	return nil
+}
+
+func buildSandboxOptions(projectRoot, backend, projectMountMode, offlineImage string) (api.SandboxOptions, error) {
+	projectRoot = strings.TrimSpace(projectRoot)
+	if projectRoot == "" {
+		projectRoot = "."
+	}
+	absProjectRoot, err := filepath.Abs(projectRoot)
+	if err != nil {
+		return api.SandboxOptions{}, fmt.Errorf("resolve project root: %w", err)
+	}
+	projectRoot = absProjectRoot
+	backend = strings.ToLower(strings.TrimSpace(backend))
+	if backend == "" {
+		backend = "host"
+	}
+	projectMountMode = strings.ToLower(strings.TrimSpace(projectMountMode))
+	if projectMountMode == "" {
+		projectMountMode = "ro"
+	}
+	switch projectMountMode {
+	case "ro", "rw", "off":
+	default:
+		return api.SandboxOptions{}, fmt.Errorf("invalid --sandbox-project-mount %q (expected ro|rw|off)", projectMountMode)
+	}
+
+	switch backend {
+	case "host":
+		return api.SandboxOptions{}, nil
+	case "gvisor":
+		opts := api.SandboxOptions{
+			Type: "gvisor",
+			GVisor: &api.GVisorOptions{
+				Enabled:                    true,
+				DefaultGuestCwd:            "/workspace",
+				AutoCreateSessionWorkspace: true,
+				SessionWorkspaceBase:       filepath.Join(projectRoot, "workspace"),
+			},
+		}
+		if projectMountMode != "off" {
+			opts.GVisor.Mounts = append(opts.GVisor.Mounts, api.MountSpec{
+				HostPath:  projectRoot,
+				GuestPath: "/project",
+				ReadOnly:  projectMountMode != "rw",
+			})
+		}
+		return opts, nil
+	case "govm":
+		if strings.TrimSpace(offlineImage) == "" {
+			offlineImage = "py312-alpine"
+		}
+		opts := api.SandboxOptions{
+			Type: "govm",
+			Govm: &api.GovmOptions{
+				Enabled:                    true,
+				DefaultGuestCwd:            "/workspace",
+				AutoCreateSessionWorkspace: true,
+				SessionWorkspaceBase:       filepath.Join(projectRoot, "workspace"),
+				RuntimeHome:                filepath.Join(projectRoot, ".govm"),
+				OfflineImage:               offlineImage,
+			},
+		}
+		if projectMountMode != "off" {
+			opts.Govm.Mounts = append(opts.Govm.Mounts, api.MountSpec{
+				HostPath:  projectRoot,
+				GuestPath: "/project",
+				ReadOnly:  projectMountMode != "rw",
+			})
+		}
+		return opts, nil
+	default:
+		return api.SandboxOptions{}, fmt.Errorf("invalid --sandbox-backend %q (expected host|gvisor|govm)", backend)
+	}
+}
+
+func defaultValidateGovmPlatform() error {
+	switch runtime.GOOS + "/" + runtime.GOARCH {
+	case "linux/amd64", "linux/arm64", "darwin/arm64":
+		return nil
+	default:
+		return fmt.Errorf("govm requires linux/amd64, linux/arm64, or darwin/arm64; current platform is %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+}
+
+func defaultValidateGovmRuntime(opts api.GovmOptions) error {
+	rt, err := govmclient.NewRuntime(&govmclient.RuntimeOptions{HomeDir: opts.RuntimeHome})
+	if err != nil {
+		return err
+	}
+	rt.Close()
+	return nil
+}
+
+func isGovmNativeUnavailable(err error) bool {
+	return errors.Is(err, govmclient.ErrNativeUnavailable) || strings.Contains(strings.ToLower(err.Error()), "govm native bridge unavailable")
 }
 
 func resolvePrompt(literal, file string, tail []string) (string, error) {
@@ -230,6 +358,20 @@ func resolvePrompt(literal, file string, tail []string) (string, error) {
 		return "", err
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+func shouldAutoEnterInteractive(literal, file string, tail []string, stream, acp bool) bool {
+	if acp || stream {
+		return false
+	}
+	if strings.TrimSpace(literal) != "" || strings.TrimSpace(file) != "" || len(tail) > 0 {
+		return false
+	}
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 func printResponse(resp *api.Response, out io.Writer) {

@@ -47,6 +47,8 @@ go run ./cmd/cli --prompt "分析仓库" --stream --stream-format rendered
 go run ./cmd/cli --repl
 ```
 
+完整 CLI 手册见 [docs/cli.zh-CN.md](docs/cli.zh-CN.md)。
+
 ### 并发模型
 - **线程安全 Runtime**：内部对可变状态加锁。
 - **会话互斥**：相同 `SessionID` 的并发 `Run`/`RunStream` 会返回 `ErrConcurrentExecution`（需要串行化时由调用方自行排队/重试）。

@@ -324,6 +324,9 @@ func resolveSkillRoots(opts LoaderOptions) []string {
 		if base != "" {
 			add(filepath.Join(base, "skills"))
 		}
+		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+			add(filepath.Join(home, ".agents", "skills"))
+		}
 	}
 	return roots
 }

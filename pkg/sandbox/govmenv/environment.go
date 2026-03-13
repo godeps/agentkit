@@ -20,6 +20,7 @@ import (
 
 type sessionState struct {
 	prepared *sandboxenv.PreparedSession
+	mounts   []sandboxenv.MountSpec
 	box      *govmclient.Box
 	boxName  string
 }
@@ -54,27 +55,21 @@ func (e *Environment) PrepareSession(ctx context.Context, session sandboxenv.Ses
 	if err != nil {
 		return nil, err
 	}
-	box, boxName, err := e.createAndStartBox(ctx, session.SessionID, prepared, mounts)
-	if err != nil {
-		return nil, err
-	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if existing, ok := e.sessions[session.SessionID]; ok {
-		_ = box.Stop()
-		box.Close()
-		if rt := e.runtime; rt != nil {
-			_ = rt.RemoveBox(ctx, boxName, true)
-		}
 		return existing.prepared, nil
 	}
-	e.sessions[session.SessionID] = &sessionState{prepared: prepared, box: box, boxName: boxName}
+	e.sessions[session.SessionID] = &sessionState{
+		prepared: prepared,
+		mounts:   append([]sandboxenv.MountSpec(nil), mounts...),
+	}
 	return prepared, nil
 }
 
 func (e *Environment) RunCommand(ctx context.Context, ps *sandboxenv.PreparedSession, req sandboxenv.CommandRequest) (*sandboxenv.CommandResult, error) {
-	state, err := e.session(ps)
+	state, err := e.ensureSessionBox(ctx, ps)
 	if err != nil {
 		return nil, err
 	}
@@ -346,10 +341,49 @@ func (e *Environment) session(ps *sandboxenv.PreparedSession) (*sessionState, er
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	state := e.sessions[ps.SessionID]
-	if state == nil || state.box == nil {
+	if state == nil {
 		return nil, errors.New("govmenv: session is not initialized")
 	}
 	return state, nil
+}
+
+func (e *Environment) ensureSessionBox(ctx context.Context, ps *sandboxenv.PreparedSession) (*sessionState, error) {
+	state, err := e.session(ps)
+	if err != nil {
+		return nil, err
+	}
+	if state.box != nil {
+		return state, nil
+	}
+
+	box, boxName, err := e.createAndStartBox(ctx, ps.SessionID, state.prepared, state.mounts)
+	if err != nil {
+		return nil, err
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	current := e.sessions[ps.SessionID]
+	if current == nil {
+		_ = box.Stop()
+		box.Close()
+		if rt := e.runtime; rt != nil {
+			_ = rt.RemoveBox(ctx, boxName, true)
+		}
+		return nil, errors.New("govmenv: session is not initialized")
+	}
+	if current.box == nil {
+		current.box = box
+		current.boxName = boxName
+		return current, nil
+	}
+
+	_ = box.Stop()
+	box.Close()
+	if rt := e.runtime; rt != nil {
+		_ = rt.RemoveBox(ctx, boxName, true)
+	}
+	return current, nil
 }
 
 func mapperFromPreparedSession(ps *sandboxenv.PreparedSession) (*pathmap.Mapper, error) {

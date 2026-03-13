@@ -46,4 +46,5 @@ type ReplEngine interface {
 	StreamEngine
 	ModelName() string
 	Skills() []SkillMeta
+	SandboxBackend() string
 }

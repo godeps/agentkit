@@ -12,6 +12,23 @@ import (
 	"github.com/google/uuid"
 )
 
+type InteractiveShellConfig struct {
+	Engine            ReplEngine
+	InitialSessionID  string
+	TimeoutMs         int
+	Verbose           bool
+	WaterfallMode     string
+	ShowStatusPerTurn bool
+}
+
+type InteractiveShell struct {
+	cfg InteractiveShellConfig
+}
+
+func NewInteractiveShell(cfg InteractiveShellConfig) *InteractiveShell {
+	return &InteractiveShell{cfg: cfg}
+}
+
 func PrintBanner(out io.Writer, modelName string, metas []SkillMeta) {
 	if out == nil {
 		return
@@ -23,6 +40,25 @@ func PrintBanner(out io.Writer, modelName string, metas []SkillMeta) {
 }
 
 func RunREPL(ctx context.Context, in io.ReadCloser, out, errOut io.Writer, eng ReplEngine, timeoutMs int, verbose bool, waterfallMode string, initialSessionID string) {
+	_ = RunInteractiveShell(ctx, in, out, errOut, eng, timeoutMs, verbose, waterfallMode, initialSessionID)
+}
+
+func RunInteractiveShell(ctx context.Context, in io.ReadCloser, out, errOut io.Writer, eng ReplEngine, timeoutMs int, verbose bool, waterfallMode string, initialSessionID string) error {
+	shell := NewInteractiveShell(InteractiveShellConfig{
+		Engine:            eng,
+		InitialSessionID:  initialSessionID,
+		TimeoutMs:         timeoutMs,
+		Verbose:           verbose,
+		WaterfallMode:     waterfallMode,
+		ShowStatusPerTurn: true,
+	})
+	if err := shell.Run(ctx, in, out, errOut); err != nil && errOut != nil {
+		fmt.Fprintf(errOut, "interactive shell failed: %v\n", err)
+	}
+	return nil
+}
+
+func (s *InteractiveShell) Run(ctx context.Context, in io.ReadCloser, out, errOut io.Writer) error {
 	if out == nil {
 		out = io.Discard
 	}
@@ -43,23 +79,25 @@ func RunREPL(ctx context.Context, in io.ReadCloser, out, errOut io.Writer, eng R
 	})
 	if err != nil {
 		fmt.Fprintf(errOut, "init repl failed: %v\n", err)
-		return
+		return err
 	}
 	defer rl.Close()
 
-	sessionID := strings.TrimSpace(initialSessionID)
+	sessionID := strings.TrimSpace(s.cfg.InitialSessionID)
 	if sessionID == "" {
 		sessionID = uuid.NewString()
 	}
 
 	for {
+		if s.cfg.ShowStatusPerTurn {
+			printShellStatus(out, s.cfg.Engine, sessionID)
+		}
 		line, err := rl.Readline()
 		if isReadTermination(err) {
 			break
 		}
 		if err != nil {
-			fmt.Fprintf(errOut, "read failed: %v\n", err)
-			break
+			return fmt.Errorf("read failed: %w", err)
 		}
 
 		input := strings.TrimSpace(line)
@@ -68,17 +106,18 @@ func RunREPL(ctx context.Context, in io.ReadCloser, out, errOut io.Writer, eng R
 		}
 
 		if strings.HasPrefix(input, "/") {
-			if handleCommand(input, eng, &sessionID, out) {
-				return
+			if handleCommand(input, s.cfg.Engine, &sessionID, out) {
+				return nil
 			}
 			continue
 		}
 
-		if err := RunStream(ctx, out, errOut, eng, sessionID, input, timeoutMs, verbose, waterfallMode); err != nil {
+		if err := RunStream(ctx, out, errOut, s.cfg.Engine, sessionID, input, s.cfg.TimeoutMs, s.cfg.Verbose, s.cfg.WaterfallMode); err != nil {
 			fmt.Fprintf(errOut, "run failed: %v\n", err)
 		}
 	}
 	fmt.Fprintln(out, "bye")
+	return nil
 }
 
 type nopWriteCloser struct {
@@ -122,4 +161,19 @@ func handleCommand(input string, eng ReplEngine, sessionID *string, out io.Write
 		fmt.Fprintf(out, "unknown command: %s\n", cmd)
 	}
 	return false
+}
+
+func printShellStatus(out io.Writer, eng ReplEngine, sessionID string) {
+	if out == nil || eng == nil {
+		return
+	}
+	fmt.Fprintf(out, "Session: %s | Model: %s | Repo: %s | Sandbox: %s | Skills: %d\n",
+		sessionID, eng.ModelName(), eng.RepoRoot(), displayValue(eng.SandboxBackend(), "host"), len(eng.Skills()))
+}
+
+func displayValue(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }

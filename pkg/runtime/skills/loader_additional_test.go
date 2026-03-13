@@ -156,6 +156,7 @@ func TestSkillBodyLengthVariants(t *testing.T) {
 }
 
 func TestSetSkillFileOpsForTest(t *testing.T) {
+	isolateAgentsSkillsHome(t)
 	root := t.TempDir()
 	dir := filepath.Join(root, ".claude", "skills", "testops")
 	skillPath := filepath.Join(dir, "SKILL.md")
@@ -209,6 +210,7 @@ func TestSetSkillFileOpsForTest(t *testing.T) {
 }
 
 func TestLoadFromFSMultipleDirectoriesRecursive(t *testing.T) {
+	isolateAgentsSkillsHome(t)
 	root := t.TempDir()
 	dirA := filepath.Join(root, "ext-a")
 	dirB := filepath.Join(root, "ext-b")
@@ -236,6 +238,7 @@ func TestLoadFromFSMultipleDirectoriesRecursive(t *testing.T) {
 }
 
 func TestLoadFromFSRecursiveToggle(t *testing.T) {
+	isolateAgentsSkillsHome(t)
 	root := t.TempDir()
 	dir := filepath.Join(root, "skills")
 	writeSkill(t, filepath.Join(dir, "nested", "gamma", "SKILL.md"), "gamma", "g")
@@ -254,6 +257,7 @@ func TestLoadFromFSRecursiveToggle(t *testing.T) {
 }
 
 func TestLoadFromFSWithConfigRoot(t *testing.T) {
+	isolateAgentsSkillsHome(t)
 	root := t.TempDir()
 	writeSkill(t, filepath.Join(root, "config", "skills", "delta", "SKILL.md"), "delta", "d")
 	regs, errs := LoadFromFS(LoaderOptions{
@@ -264,6 +268,53 @@ func TestLoadFromFSWithConfigRoot(t *testing.T) {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
 	if len(regs) != 1 || regs[0].Definition.Name != "delta" {
+		t.Fatalf("unexpected regs: %+v", regs)
+	}
+}
+
+func TestLoadFromFSWithConfigRootIncludesAgentsSkills(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeSkill(t, filepath.Join(root, "config", "skills", "delta", "SKILL.md"), "delta", "d")
+	writeSkill(t, filepath.Join(home, ".agents", "skills", "omega", "SKILL.md"), "omega", "o")
+
+	regs, errs := LoadFromFS(LoaderOptions{
+		ProjectRoot: root,
+		ConfigRoot:  "config",
+	})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errs: %v", errs)
+	}
+	if len(regs) != 2 {
+		t.Fatalf("expected 2 skills, got %d", len(regs))
+	}
+	var names []string
+	for _, reg := range regs {
+		names = append(names, reg.Definition.Name)
+	}
+	sort.Strings(names)
+	if strings.Join(names, ",") != "delta,omega" {
+		t.Fatalf("unexpected names: %v", names)
+	}
+}
+
+func TestLoadFromFSExplicitDirectoriesDoNotIncludeAgentsSkills(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	custom := filepath.Join(root, "custom-skills")
+	t.Setenv("HOME", home)
+	writeSkill(t, filepath.Join(home, ".agents", "skills", "omega", "SKILL.md"), "omega", "o")
+	writeSkill(t, filepath.Join(custom, "zeta", "SKILL.md"), "zeta", "z")
+
+	regs, errs := LoadFromFS(LoaderOptions{
+		ProjectRoot: root,
+		Directories: []string{custom},
+	})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errs: %v", errs)
+	}
+	if len(regs) != 1 || regs[0].Definition.Name != "zeta" {
 		t.Fatalf("unexpected regs: %+v", regs)
 	}
 }
@@ -285,6 +336,7 @@ func TestNilHandlerBodyLength(t *testing.T) {
 }
 
 func TestHandlerReloadAfterError(t *testing.T) {
+	isolateAgentsSkillsHome(t)
 	root := t.TempDir()
 	dir := filepath.Join(root, ".claude", "skills", "reloaderr")
 	skillPath := filepath.Join(dir, "SKILL.md")

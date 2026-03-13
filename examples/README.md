@@ -2,7 +2,7 @@
 
 # agentkit Examples
 
-Twelve examples. Run everything from the repo root.
+Thirteen examples. Run everything from the repo root.
 
 **Environment Setup**
 
@@ -35,6 +35,7 @@ export ANTHROPIC_API_KEY=sk-ant-your-key-here
 - `10-hooks` (~85 lines): hooks system with PreToolUse/PostToolUse shell hooks.
 - `11-reasoning` (~186 lines): reasoning model support (DeepSeek-R1 reasoning_content passthrough).
 - `12-multimodal` (~135 lines): multimodal content blocks (text + images).
+- `13-govm-sandbox` (~focused demo): standalone govm sandbox demo for readonly/readwrite mounts and per-session workspace output.
 
 ## 01-basic — minimal entry
 - Purpose: fastest way to see the SDK loop in action with one request/response.
@@ -137,3 +138,11 @@ go run ./examples/11-reasoning
 source .env
 go run ./examples/12-multimodal
 ```
+
+## 13-govm-sandbox — standalone govm sandbox demo
+- Key features: readonly `/inputs`, readwrite `/shared`, automatic session workspace under `workspace/<session-id>`, host-side file verification.
+- Run:
+```bash
+go run ./examples/13-govm-sandbox
+```
+- See [13-govm-sandbox/README.md](13-govm-sandbox/README.md) for expected output and generated files.

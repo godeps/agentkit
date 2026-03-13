@@ -45,6 +45,7 @@ func TestRuntimeAdapterExposesModelNameAndRepoRoot(t *testing.T) {
 }
 
 func TestRuntimeAdapterReturnsDiscoveredSkills(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	skillDir := filepath.Join(root, ".claude", "skills", "demo-skill")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {

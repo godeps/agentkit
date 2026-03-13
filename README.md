@@ -67,6 +67,8 @@ go run ./cmd/cli --prompt "inspect repo" --stream --stream-format rendered
 go run ./cmd/cli --repl
 ```
 
+For the full CLI manual, see [docs/cli.md](docs/cli.md).
+
 ## System Architecture
 
 ### Core Layer

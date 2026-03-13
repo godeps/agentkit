@@ -28,3 +28,8 @@ func writeSkill(t *testing.T, path, name, body string) {
 	}, "\n")
 	mustWrite(t, path, frontmatter)
 }
+
+func isolateAgentsSkillsHome(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+}
