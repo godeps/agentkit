@@ -3,10 +3,12 @@ package toolbuiltin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
 	"github.com/godeps/agentkit/pkg/security"
 )
 
@@ -99,9 +101,86 @@ func TestConsumeStreamReadError(t *testing.T) {
 	}
 }
 
+func TestBashToolStreamExecuteUsesStreamingEnvironmentForVirtualizedSandbox(t *testing.T) {
+	t.Parallel()
+
+	env := &fakeStreamingEnvironment{
+		prepared: &sandboxenv.PreparedSession{
+			SessionID:   "sess-1",
+			GuestCwd:    "/workspace",
+			SandboxType: "govm",
+		},
+		result: &sandboxenv.CommandResult{
+			Stdout:   "hello",
+			Stderr:   "warn",
+			ExitCode: 0,
+		},
+	}
+	tool := NewBashToolWithSandbox("", security.NewDisabledSandbox())
+	tool.SetEnvironment(env)
+
+	var got []string
+	res, err := tool.StreamExecute(context.Background(), map[string]interface{}{
+		"command": "echo hello",
+	}, func(chunk string, isStderr bool) {
+		got = append(got, fmt.Sprintf("%t:%s", isStderr, chunk))
+	})
+	if err != nil {
+		t.Fatalf("stream execute failed: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected success")
+	}
+	if res.Output != "hello\nwarn" {
+		t.Fatalf("unexpected output %q", res.Output)
+	}
+	if strings.Join(got, ",") != "false:hello,true:warn" {
+		t.Fatalf("unexpected stream chunks: %v", got)
+	}
+}
+
 type errReadCloser struct {
 	err error
 }
 
 func (e *errReadCloser) Read([]byte) (int, error) { return 0, e.err }
 func (e *errReadCloser) Close() error             { return nil }
+
+type fakeStreamingEnvironment struct {
+	prepared *sandboxenv.PreparedSession
+	result   *sandboxenv.CommandResult
+}
+
+func (f *fakeStreamingEnvironment) PrepareSession(context.Context, sandboxenv.SessionContext) (*sandboxenv.PreparedSession, error) {
+	return f.prepared, nil
+}
+func (f *fakeStreamingEnvironment) RunCommand(context.Context, *sandboxenv.PreparedSession, sandboxenv.CommandRequest) (*sandboxenv.CommandResult, error) {
+	return f.result, nil
+}
+func (f *fakeStreamingEnvironment) RunCommandStream(_ context.Context, _ *sandboxenv.PreparedSession, _ sandboxenv.CommandRequest, cb sandboxenv.CommandStreamCallbacks) (*sandboxenv.CommandResult, error) {
+	if cb.OnStdout != nil {
+		cb.OnStdout("hello")
+	}
+	if cb.OnStderr != nil {
+		cb.OnStderr("warn")
+	}
+	return f.result, nil
+}
+func (f *fakeStreamingEnvironment) ReadFile(context.Context, *sandboxenv.PreparedSession, string) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStreamingEnvironment) WriteFile(context.Context, *sandboxenv.PreparedSession, string, []byte) error {
+	return errors.New("not implemented")
+}
+func (f *fakeStreamingEnvironment) EditFile(context.Context, *sandboxenv.PreparedSession, sandboxenv.EditRequest) error {
+	return errors.New("not implemented")
+}
+func (f *fakeStreamingEnvironment) Glob(context.Context, *sandboxenv.PreparedSession, string) ([]string, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStreamingEnvironment) Grep(context.Context, *sandboxenv.PreparedSession, sandboxenv.GrepRequest) ([]sandboxenv.GrepMatch, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeStreamingEnvironment) CloseSession(context.Context, *sandboxenv.PreparedSession) error {
+	return nil
+}

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	sandboxenv "github.com/godeps/agentkit/pkg/sandbox/env"
 	"github.com/godeps/agentkit/pkg/tool"
 )
 
@@ -41,7 +42,71 @@ func (b *BashTool) StreamExecute(ctx context.Context, params map[string]interfac
 		return nil, err
 	}
 	if isVirtualizedSandboxSession(ps) {
-		return nil, errors.New("streaming bash is not supported in virtualized sandbox mode")
+		streamEnv, ok := b.env.(sandboxenv.StreamingExecutionEnvironment)
+		if !ok {
+			return nil, errors.New("streaming bash is not supported in virtualized sandbox mode")
+		}
+		timeout, err := b.resolveTimeout(params)
+		if err != nil {
+			return nil, err
+		}
+		start := time.Now()
+		spool := newBashOutputSpool(ctx, b.effectiveOutputThresholdBytes())
+		res, err := streamEnv.RunCommandStream(ctx, ps, sandboxenv.CommandRequest{
+			Command: command,
+			Workdir: workdir,
+			Timeout: timeout,
+		}, sandboxenv.CommandStreamCallbacks{
+			OnStdout: func(chunk string) {
+				if emit != nil {
+					emit(chunk, false)
+				}
+				if spool != nil {
+					_ = spool.Append(chunk, false)
+					_ = spool.Append("\n", false)
+				}
+			},
+			OnStderr: func(chunk string) {
+				if emit != nil {
+					emit(chunk, true)
+				}
+				if spool != nil {
+					_ = spool.Append(chunk, true)
+					_ = spool.Append("\n", true)
+				}
+			},
+		})
+		if res == nil {
+			res = &sandboxenv.CommandResult{}
+		}
+		output, outputFile, spoolErr := spool.Finalize()
+		duration := res.Duration
+		if duration <= 0 {
+			duration = time.Since(start)
+		}
+		data := map[string]interface{}{
+			"workdir":     workdir,
+			"duration_ms": duration.Milliseconds(),
+			"timeout_ms":  timeout.Milliseconds(),
+		}
+		if outputFile != "" {
+			data["output_file"] = outputFile
+		}
+		if spoolErr != nil {
+			data["spool_error"] = spoolErr.Error()
+		}
+		if output == "" {
+			output = combineOutput(res.Stdout, res.Stderr)
+		}
+		result := &tool.ToolResult{
+			Success: err == nil && res.ExitCode == 0,
+			Output:  output,
+			Data:    data,
+		}
+		if err != nil {
+			return result, err
+		}
+		return result, nil
 	}
 	timeout, err := b.resolveTimeout(params)
 	if err != nil {

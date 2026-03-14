@@ -17,6 +17,18 @@ type ExecutionEnvironment interface {
 	CloseSession(context.Context, *PreparedSession) error
 }
 
+// CommandStreamCallbacks receives incremental command output.
+type CommandStreamCallbacks struct {
+	OnStdout func(string)
+	OnStderr func(string)
+}
+
+// StreamingExecutionEnvironment adds incremental command output support.
+type StreamingExecutionEnvironment interface {
+	ExecutionEnvironment
+	RunCommandStream(context.Context, *PreparedSession, CommandRequest, CommandStreamCallbacks) (*CommandResult, error)
+}
+
 // SessionContext identifies one logical runtime session.
 type SessionContext struct {
 	SessionID   string

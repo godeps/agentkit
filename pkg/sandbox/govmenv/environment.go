@@ -21,8 +21,16 @@ import (
 type sessionState struct {
 	prepared *sandboxenv.PreparedSession
 	mounts   []sandboxenv.MountSpec
-	box      *govmclient.Box
+	box      govmBox
 	boxName  string
+}
+
+type govmBox interface {
+	Start() error
+	Stop() error
+	Close()
+	Exec(string, *govmclient.ExecOptions) (*govmclient.ExecResult, error)
+	ExecStream(string, *govmclient.ExecOptions, govmclient.ExecStreamCallbacks) (*govmclient.ExecResult, error)
 }
 
 type Environment struct {
@@ -86,6 +94,36 @@ func (e *Environment) RunCommand(ctx context.Context, ps *sandboxenv.PreparedSes
 	})
 	if err != nil {
 		return nil, fmt.Errorf("govmenv: exec command: %w", err)
+	}
+	return &sandboxenv.CommandResult{
+		Stdout:   strings.Join(res.Stdout, "\n"),
+		Stderr:   strings.Join(res.Stderr, "\n"),
+		ExitCode: res.ExitCode,
+		Duration: time.Since(start),
+	}, nil
+}
+
+func (e *Environment) RunCommandStream(ctx context.Context, ps *sandboxenv.PreparedSession, req sandboxenv.CommandRequest, cb sandboxenv.CommandStreamCallbacks) (*sandboxenv.CommandResult, error) {
+	state, err := e.ensureSessionBox(ctx, ps)
+	if err != nil {
+		return nil, err
+	}
+	workdir := req.Workdir
+	if strings.TrimSpace(workdir) == "" {
+		workdir = ps.GuestCwd
+	}
+	start := time.Now()
+	res, err := state.box.ExecStream("/bin/sh", &govmclient.ExecOptions{
+		Args:       []string{"-lc", req.Command},
+		Env:        req.Env,
+		Timeout:    req.Timeout,
+		WorkingDir: workdir,
+	}, govmclient.ExecStreamCallbacks{
+		OnStdout: cb.OnStdout,
+		OnStderr: cb.OnStderr,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("govmenv: exec stream command: %w", err)
 	}
 	return &sandboxenv.CommandResult{
 		Stdout:   strings.Join(res.Stdout, "\n"),
@@ -281,7 +319,7 @@ func (e *Environment) CloseSession(ctx context.Context, ps *sandboxenv.PreparedS
 	return nil
 }
 
-func (e *Environment) createAndStartBox(ctx context.Context, sessionID string, ps *sandboxenv.PreparedSession, mounts []sandboxenv.MountSpec) (*govmclient.Box, string, error) {
+func (e *Environment) createAndStartBox(ctx context.Context, sessionID string, ps *sandboxenv.PreparedSession, mounts []sandboxenv.MountSpec) (govmBox, string, error) {
 	rt, err := e.ensureRuntime()
 	if err != nil {
 		return nil, "", err
