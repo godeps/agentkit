@@ -51,7 +51,11 @@ func (f fakeReplEngine) SandboxBackend() string { return "govm" }
 func TestHandleCommandListsSkills(t *testing.T) {
 	var out bytes.Buffer
 	sessionID := "s1"
-	if quit := handleCommand("/skills", fakeReplEngine{}, &sessionID, &out); quit {
+	handled, quit := handleCommand("/skills", fakeReplEngine{}, &sessionID, &out)
+	if !handled {
+		t.Fatalf("skills command should be handled")
+	}
+	if quit {
 		t.Fatalf("skills command should not quit")
 	}
 	if got := out.String(); got != "- a\n- b\n" {
@@ -127,5 +131,31 @@ func TestInteractiveShellPrintsStatusAndContinuesAfterErrors(t *testing.T) {
 	}
 	if bytes.Count([]byte(got), []byte("bye")) != 1 {
 		t.Fatalf("expected single bye, got %q", got)
+	}
+}
+
+func TestInteractiveShellUnknownSlashInputFallsThrough(t *testing.T) {
+	in := io.NopCloser(bytes.NewBufferString("/unknown hi\n/quit\n"))
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	eng := &scriptedReplEngine{}
+
+	shell := NewInteractiveShell(InteractiveShellConfig{
+		Engine:            eng,
+		InitialSessionID:  "sess-2",
+		TimeoutMs:         100,
+		Verbose:           false,
+		WaterfallMode:     WaterfallModeOff,
+		ShowStatusPerTurn: false,
+	})
+	if err := shell.Run(context.Background(), in, &out, &errOut); err != nil {
+		t.Fatalf("run shell: %v", err)
+	}
+
+	if len(eng.calls) != 1 || eng.calls[0] != "sess-2:/unknown hi" {
+		t.Fatalf("unexpected stream calls: %+v", eng.calls)
+	}
+	if got := out.String(); bytes.Contains([]byte(got), []byte("unknown command")) {
+		t.Fatalf("unexpected unknown command output: %q", got)
 	}
 }

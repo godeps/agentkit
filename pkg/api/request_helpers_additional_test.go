@@ -187,3 +187,55 @@ func TestCombineToolWhitelistsIntersection(t *testing.T) {
 		t.Fatalf("expected intersection, got %v", got)
 	}
 }
+
+func TestExtractPromptSkillInvocations(t *testing.T) {
+	t.Parallel()
+
+	skillLookup := func(name string) bool {
+		switch name {
+		case "ai-sdk", "yt-dlp":
+			return true
+		default:
+			return false
+		}
+	}
+	commandLookup := func(name string) bool {
+		return name == "tag"
+	}
+
+	forced, cleaned, missing := extractPromptSkillInvocations(
+		"/tag keep\n$ai-sdk /yt-dlp build this\n$ai-sdk",
+		skillLookup,
+		commandLookup,
+	)
+
+	if len(forced) != 2 || forced[0] != "ai-sdk" || forced[1] != "yt-dlp" {
+		t.Fatalf("unexpected forced skills: %v", forced)
+	}
+	if got := cleaned; got != "/tag keep\nbuild this" {
+		t.Fatalf("unexpected cleaned prompt %q", got)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("unexpected missing skills: %v", missing)
+	}
+}
+
+func TestExtractPromptSkillInvocationsTreatsUnknownSlashAsSkill(t *testing.T) {
+	t.Parallel()
+
+	forced, cleaned, missing := extractPromptSkillInvocations(
+		"/unknown-skill inspect system",
+		func(string) bool { return false },
+		func(string) bool { return false },
+	)
+
+	if len(forced) != 0 {
+		t.Fatalf("expected no resolved skills, got %v", forced)
+	}
+	if got := cleaned; got != "inspect system" {
+		t.Fatalf("unexpected cleaned prompt %q", got)
+	}
+	if len(missing) != 1 || missing[0] != "unknown-skill" {
+		t.Fatalf("unexpected missing skills: %v", missing)
+	}
+}

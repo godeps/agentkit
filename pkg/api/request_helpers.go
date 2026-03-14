@@ -32,6 +32,78 @@ func removeCommandLines(prompt string, invs []commands.Invocation) string {
 	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
+func extractPromptSkillInvocations(prompt string, skillExists func(string) bool, commandExists func(string) bool) ([]string, string, []string) {
+	if strings.TrimSpace(prompt) == "" {
+		return nil, prompt, nil
+	}
+	var forced []string
+	var missing []string
+	forcedSeen := map[string]struct{}{}
+	missingSeen := map[string]struct{}{}
+	lines := strings.Split(prompt, "\n")
+	cleanedLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			cleanedLines = append(cleanedLines, "")
+			continue
+		}
+		kept := make([]string, 0, len(fields))
+		for _, field := range fields {
+			name, ok := parsePromptSkillMarker(field)
+			if !ok {
+				kept = append(kept, field)
+				continue
+			}
+			if strings.HasPrefix(field, "/") && commandExists != nil && commandExists(name) {
+				kept = append(kept, field)
+				continue
+			}
+			if skillExists != nil && skillExists(name) {
+				if _, seen := forcedSeen[name]; !seen {
+					forcedSeen[name] = struct{}{}
+					forced = append(forced, name)
+				}
+				continue
+			}
+			if _, seen := missingSeen[name]; !seen {
+				missingSeen[name] = struct{}{}
+				missing = append(missing, name)
+			}
+		}
+		cleanedLines = append(cleanedLines, strings.Join(kept, " "))
+	}
+	return forced, strings.TrimSpace(strings.Join(cleanedLines, "\n")), missing
+}
+
+func parsePromptSkillMarker(token string) (string, bool) {
+	token = strings.TrimSpace(token)
+	if len(token) < 2 {
+		return "", false
+	}
+	switch token[0] {
+	case '$', '/':
+	default:
+		return "", false
+	}
+	name := canonicalToolName(strings.TrimPrefix(strings.TrimPrefix(token, "$"), "/"))
+	if !isValidSkillName(name) {
+		return "", false
+	}
+	return name, true
+}
+
+func unknownForcedSkillsError(names []string) error {
+	switch len(names) {
+	case 0:
+		return nil
+	case 1:
+		return fmt.Errorf("api: unknown skill %q", names[0])
+	default:
+		return fmt.Errorf("api: unknown skills %s", strings.Join(names, ", "))
+	}
+}
+
 func applyPromptMetadata(prompt string, meta map[string]any) string {
 	if len(meta) == 0 {
 		return prompt
@@ -140,6 +212,22 @@ func canonicalToolName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
+func isValidSkillName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for idx, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '-' && idx > 0 && idx < len(name)-1:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func toLowerSet(values []string) map[string]struct{} {
 	if len(values) == 0 {
 		return nil
@@ -190,6 +278,28 @@ func orderedForcedSkills(reg *skills.Registry, names []string) []skills.Activati
 		activations = append(activations, skills.Activation{Skill: skill})
 	}
 	return activations
+}
+
+func mergeOrderedNames(existing []string, extra []string) []string {
+	if len(existing) == 0 && len(extra) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	merged := make([]string, 0, len(existing)+len(extra))
+	for _, group := range [][]string{existing, extra} {
+		for _, name := range group {
+			key := canonicalToolName(name)
+			if key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			merged = append(merged, key)
+		}
+	}
+	return merged
 }
 
 func combinePrompt(current string, output any) string {

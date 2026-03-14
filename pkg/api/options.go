@@ -744,6 +744,9 @@ func (r Request) normalized(defaultMode ModeContext, fallbackSession string) Req
 	if len(req.ToolWhitelist) > 0 {
 		req.ToolWhitelist = cloneStrings(req.ToolWhitelist)
 	}
+	if len(req.ForceSkills) > 0 {
+		req.ForceSkills = append([]string(nil), req.ForceSkills...)
+	}
 	if len(req.ContentBlocks) > 0 {
 		req.ContentBlocks = append([]model.ContentBlock(nil), req.ContentBlocks...)
 	}

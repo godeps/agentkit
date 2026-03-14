@@ -487,8 +487,35 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 	}
 	fallbackSession := defaultSessionID(rt.mode.EntryPoint)
 	normalized := req.normalized(rt.mode, fallbackSession)
+	commandExists := func(string) bool { return false }
+	if rt.cmdExec != nil {
+		known := map[string]struct{}{}
+		for _, def := range rt.cmdExec.List() {
+			name := canonicalToolName(def.Name)
+			if name != "" {
+				known[name] = struct{}{}
+			}
+		}
+		commandExists = func(name string) bool {
+			_, ok := known[canonicalToolName(name)]
+			return ok
+		}
+	}
+	skillExists := func(string) bool { return false }
+	if rt.skReg != nil {
+		skillExists = func(name string) bool {
+			_, ok := rt.skReg.Get(canonicalToolName(name))
+			return ok
+		}
+	}
+	parsedSkills, cleanedPrompt, missingSkills := extractPromptSkillInvocations(normalized.Prompt, skillExists, commandExists)
+	if err := unknownForcedSkillsError(missingSkills); err != nil {
+		return preparedRun{}, err
+	}
+	normalized.ForceSkills = mergeOrderedNames(normalized.ForceSkills, parsedSkills)
+	normalized.Prompt = cleanedPrompt
 	prompt := strings.TrimSpace(normalized.Prompt)
-	if prompt == "" && len(normalized.ContentBlocks) == 0 {
+	if prompt == "" && len(normalized.ContentBlocks) == 0 && len(normalized.ForceSkills) == 0 {
 		return preparedRun{}, errors.New("api: prompt is empty")
 	}
 

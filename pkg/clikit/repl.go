@@ -105,8 +105,8 @@ func (s *InteractiveShell) Run(ctx context.Context, in io.ReadCloser, out, errOu
 			continue
 		}
 
-		if strings.HasPrefix(input, "/") {
-			if handleCommand(input, s.cfg.Engine, &sessionID, out) {
+		if handled, quit := handleCommand(input, s.cfg.Engine, &sessionID, out); handled {
+			if quit {
 				return nil
 			}
 			continue
@@ -133,7 +133,7 @@ func isReadTermination(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, readline.ErrInterrupt)
 }
 
-func handleCommand(input string, eng ReplEngine, sessionID *string, out io.Writer) (quit bool) {
+func handleCommand(input string, eng ReplEngine, sessionID *string, out io.Writer) (handled bool, quit bool) {
 	if out == nil {
 		out = io.Discard
 	}
@@ -141,26 +141,29 @@ func handleCommand(input string, eng ReplEngine, sessionID *string, out io.Write
 	switch cmd {
 	case "/quit", "/exit", "/q":
 		fmt.Fprintln(out, "bye")
-		return true
+		return true, true
 	case "/new":
 		*sessionID = uuid.NewString()
 		fmt.Fprintln(out, "new conversation")
+		return true, false
 	case "/model":
 		fmt.Fprintf(out, "model: %s\n", eng.ModelName())
+		return true, false
 	case "/session":
 		fmt.Fprintf(out, "session: %s\n", *sessionID)
+		return true, false
 	case "/help":
 		fmt.Fprintln(out, "/skills /new /session /model /help /quit")
+		return true, false
 	case "/skills":
 		metas := eng.Skills()
 		sort.Slice(metas, func(i, j int) bool { return metas[i].Name < metas[j].Name })
 		for _, m := range metas {
 			fmt.Fprintf(out, "- %s\n", m.Name)
 		}
-	default:
-		fmt.Fprintf(out, "unknown command: %s\n", cmd)
+		return true, false
 	}
-	return false
+	return false, false
 }
 
 func printShellStatus(out io.Writer, eng ReplEngine, sessionID string) {
