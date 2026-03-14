@@ -67,6 +67,28 @@ go run ./cmd/cli --prompt "inspect repo" --stream --stream-format rendered
 go run ./cmd/cli --repl
 ```
 
+### CLI Skill Invocation
+
+The CLI also supports forcing runtime skills directly from the prompt:
+
+```bash
+# Force one skill with $skill-name
+go run ./cmd/cli --prompt '$find-skills 哪些是金融相关的 skills'
+
+# Force one skill with /skill-name
+go run ./cmd/cli --prompt '/find-skills 哪些是金融相关的 skills'
+
+# Force multiple skills in order
+go run ./cmd/cli --prompt '$alpha-vantage $usfiscaldata 帮我比较可用的金融数据源'
+```
+
+Notes:
+
+- Both `$skill-name` and `/skill-name` work in interactive and non-interactive CLI flows.
+- Multiple skill markers are supported in one prompt and are deduplicated in first-seen order.
+- Built-in CLI commands such as `/help`, `/skills`, and `/quit` still take precedence in interactive mode.
+- Unknown skill names fail fast with an `api: unknown skill ...` error.
+
 For the full CLI manual, see [docs/cli.md](docs/cli.md).
 
 ## System Architecture
