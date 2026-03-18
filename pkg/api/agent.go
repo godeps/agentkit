@@ -79,6 +79,8 @@ type Runtime struct {
 	cmdExec   *commands.Executor
 	skReg     *skills.Registry
 	subMgr    *subagents.Manager
+	subStore  subagents.Store
+	subExec   *subagents.Executor
 	taskStore tasks.Store
 	tokens    *tokenTracker
 	compactor *compactor
@@ -221,11 +223,15 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		cmdExec:          cmdExec,
 		skReg:            skReg,
 		subMgr:           subMgr,
+		subStore:         subagents.NewMemoryStore(),
 		taskStore:        opts.TaskStore,
 		tokens:           newTokenTracker(opts.TokenTracking, opts.TokenCallback),
 		compactor:        compactor,
 		tracer:           tracer,
 		ownsTaskStore:    ownsTaskStore,
+	}
+	if rt.subMgr != nil {
+		rt.subExec = subagents.NewExecutor(rt.subMgr, rt.subStore, runtimeSubagentRunner{rt: rt})
 	}
 	rt.sessionGate = newSessionGate()
 
@@ -894,6 +900,85 @@ func (rt *Runtime) executeSubagent(ctx context.Context, prompt string, activatio
 	return &res, prompt, nil
 }
 
+type runtimeSubagentRunner struct {
+	rt *Runtime
+}
+
+func (r runtimeSubagentRunner) RunSubagent(ctx context.Context, req subagents.RunRequest) (subagents.Result, error) {
+	if r.rt == nil || r.rt.subMgr == nil {
+		return subagents.Result{}, errors.New("api: subagent manager is not configured")
+	}
+	dispatchCtx := subagents.WithTaskDispatch(ctx)
+	if req.ParentContext.SessionID != "" || len(req.ParentContext.Metadata) > 0 || len(req.ParentContext.ToolWhitelist) > 0 || strings.TrimSpace(req.ParentContext.Model) != "" {
+		dispatchCtx = subagents.WithContext(dispatchCtx, req.ParentContext)
+	}
+	return r.rt.subMgr.Dispatch(dispatchCtx, subagents.Request{
+		Target:        req.Target,
+		Instruction:   req.Instruction,
+		Activation:    req.Activation,
+		ToolWhitelist: cloneStrings(req.ToolWhitelist),
+		Metadata:      cloneArguments(req.Metadata),
+	})
+}
+
+func (rt *Runtime) ensureSubagentExecutor() *subagents.Executor {
+	if rt == nil || rt.subMgr == nil {
+		return nil
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.subStore == nil {
+		rt.subStore = subagents.NewMemoryStore()
+	}
+	if rt.subExec == nil {
+		rt.subExec = subagents.NewExecutor(rt.subMgr, rt.subStore, runtimeSubagentRunner{rt: rt})
+	}
+	return rt.subExec
+}
+
+func (rt *Runtime) spawnSubagent(ctx context.Context, prompt string, activation skills.ActivationContext, req *Request) (subagents.SpawnHandle, error) {
+	if rt == nil {
+		return subagents.SpawnHandle{}, errors.New("api: runtime is nil")
+	}
+	exec := rt.ensureSubagentExecutor()
+	if exec == nil {
+		return subagents.SpawnHandle{}, errors.New("api: subagent manager is not configured")
+	}
+	if req == nil {
+		return subagents.SpawnHandle{}, errors.New("api: request is nil")
+	}
+	def, builtin := applySubagentTarget(req)
+	meta := map[string]any{
+		"entrypoint": req.Mode.EntryPoint,
+	}
+	for k, v := range req.Metadata {
+		meta[k] = v
+	}
+	if session := strings.TrimSpace(req.SessionID); session != "" {
+		meta["session_id"] = session
+	}
+	var parentCtx subagents.Context
+	if subCtx, ok := buildSubagentContext(*req, def, builtin); ok {
+		parentCtx = subCtx
+	}
+	return exec.Spawn(subagents.WithTaskDispatch(ctx), subagents.SpawnRequest{
+		Target:        req.TargetSubagent,
+		Instruction:   prompt,
+		Activation:    activation,
+		ToolWhitelist: cloneStrings(req.ToolWhitelist),
+		Metadata:      meta,
+		ParentContext: parentCtx,
+	})
+}
+
+func (rt *Runtime) waitSubagent(ctx context.Context, id string, timeout time.Duration) (subagents.WaitResult, error) {
+	exec := rt.ensureSubagentExecutor()
+	if exec == nil {
+		return subagents.WaitResult{}, errors.New("api: subagent manager is not configured")
+	}
+	return exec.Wait(ctx, subagents.WaitRequest{ID: id, Timeout: timeout})
+}
+
 func (rt *Runtime) taskRunner() toolbuiltin.TaskRunner {
 	return func(ctx context.Context, req toolbuiltin.TaskRequest) (*tool.ToolResult, error) {
 		return rt.runTaskInvocation(ctx, req)
@@ -934,15 +1019,26 @@ func (rt *Runtime) runTaskInvocation(ctx context.Context, req toolbuiltin.TaskRe
 	if len(reqPayload.Metadata) > 0 {
 		activation.Metadata = maps.Clone(reqPayload.Metadata)
 	}
-	dispatchCtx := subagents.WithTaskDispatch(ctx)
-	res, _, err := rt.executeSubagent(dispatchCtx, prompt, activation, reqPayload)
+	handle, err := rt.spawnSubagent(ctx, prompt, activation, reqPayload)
 	if err != nil {
 		return nil, err
 	}
-	if res == nil {
+	waited, err := rt.waitSubagent(ctx, handle.ID, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if waited.TimedOut || waited.Instance.Result == nil {
 		return nil, errors.New("api: task execution returned no result")
 	}
-	return convertTaskToolResult(*res), nil
+	res := *waited.Instance.Result
+	if len(res.Metadata) > 0 {
+		res.Metadata = maps.Clone(res.Metadata)
+	}
+	if len(res.Metadata) == 0 {
+		res.Metadata = map[string]any{}
+	}
+	res.Metadata["subagent_id"] = handle.ID
+	return convertTaskToolResult(res), nil
 }
 
 func convertTaskToolResult(res subagents.Result) *tool.ToolResult {
@@ -959,6 +1055,9 @@ func convertTaskToolResult(res subagents.Result) *tool.ToolResult {
 	}
 	if len(res.Metadata) > 0 {
 		data["metadata"] = res.Metadata
+		if id, ok := res.Metadata["subagent_id"]; ok {
+			data["subagent_id"] = id
+		}
 	}
 	if res.Error != "" {
 		data["error"] = res.Error

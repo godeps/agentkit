@@ -147,6 +147,9 @@ func TestLoadFromFS_YAML(t *testing.T) {
 	if res.Metadata == nil {
 		t.Fatalf("expected metadata")
 	}
+	if instructions, ok := res.Metadata["instructions"].(string); !ok || instructions != "## prompt body" {
+		t.Fatalf("expected instructions metadata, got %#v", res.Metadata)
+	}
 	if src, ok := res.Metadata["source"]; !ok || src != path {
 		t.Fatalf("missing source metadata: %#v", res.Metadata)
 	}

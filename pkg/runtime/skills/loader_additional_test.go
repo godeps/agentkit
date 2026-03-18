@@ -346,7 +346,7 @@ func TestLoadFromFSWithConfigRoot(t *testing.T) {
 	}
 }
 
-func TestLoadFromFSWithConfigRootIncludesAgentsSkills(t *testing.T) {
+func TestLoadFromFSWithConfigRootDoesNotIncludeAgentsSkills(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -360,16 +360,11 @@ func TestLoadFromFSWithConfigRootIncludesAgentsSkills(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
 	}
-	if len(regs) != 2 {
-		t.Fatalf("expected 2 skills, got %d", len(regs))
+	if len(regs) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(regs))
 	}
-	var names []string
-	for _, reg := range regs {
-		names = append(names, reg.Definition.Name)
-	}
-	sort.Strings(names)
-	if strings.Join(names, ",") != "delta,omega" {
-		t.Fatalf("unexpected names: %v", names)
+	if regs[0].Definition.Name != "delta" {
+		t.Fatalf("unexpected regs: %+v", regs)
 	}
 }
 

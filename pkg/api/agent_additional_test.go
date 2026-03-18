@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -646,6 +647,9 @@ func TestTaskRunnerDispatchesBuiltinTypes(t *testing.T) {
 		if !ok || data == nil || data["subagent"] != tc.payload.SubagentType {
 			t.Fatalf("missing subagent metadata for %s: %+v", tc.payload.SubagentType, res.Data)
 		}
+		if id, ok := data["subagent_id"].(string); !ok || strings.TrimSpace(id) == "" {
+			t.Fatalf("missing subagent instance id for %s: %+v", tc.payload.SubagentType, res.Data)
+		}
 	}
 
 	if len(records) != len(cases) {
@@ -687,6 +691,9 @@ func TestTaskRunnerDispatchesBuiltinTypes(t *testing.T) {
 	}
 	if val, ok := plan.meta.Metadata["task.model"].(string); !ok || val != "claude-opus-4-20250514" {
 		t.Fatalf("expected task.model metadata, got %q", plan.meta.Metadata["task.model"])
+	}
+	if rt.subStore == nil || len(rt.subStore.ListBySession("plan-session-42")) == 0 {
+		t.Fatal("expected runtime to persist subagent instances in store")
 	}
 }
 

@@ -311,6 +311,9 @@ func parseList(raw string) []string {
 
 func buildMetadataMap(file SubagentFile, tools, skills []string, model string) map[string]any {
 	meta := map[string]any{}
+	if strings.TrimSpace(file.Body) != "" {
+		meta["instructions"] = file.Body
+	}
 	if len(tools) > 0 {
 		meta["tools"] = tools
 	}

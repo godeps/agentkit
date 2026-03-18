@@ -17,7 +17,7 @@ func TestTaskToolMetadata(t *testing.T) {
 	if task.Name() != "Task" {
 		t.Fatalf("unexpected name: %s", task.Name())
 	}
-	if desc := task.Description(); !strings.Contains(desc, "Launch a new agent") {
+	if desc := task.Description(); !strings.Contains(desc, "Launch a specialized subagent execution") {
 		t.Fatalf("description mismatch: %s", desc)
 	}
 	schema := task.Schema()

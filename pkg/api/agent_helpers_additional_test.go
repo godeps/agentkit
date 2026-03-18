@@ -138,7 +138,7 @@ func TestRunTaskInvocationErrors(t *testing.T) {
 }
 
 func TestConvertTaskToolResultDefaults(t *testing.T) {
-	res := subagents.Result{Subagent: "demo", Output: "", Error: "boom", Metadata: map[string]any{"k": "v"}}
+	res := subagents.Result{Subagent: "demo", Output: "", Error: "boom", Metadata: map[string]any{"k": "v", "subagent_id": "sub-123"}}
 	out := convertTaskToolResult(res)
 	if out.Success {
 		t.Fatalf("expected failure")
@@ -146,7 +146,7 @@ func TestConvertTaskToolResultDefaults(t *testing.T) {
 	if !strings.Contains(out.Output, "demo") {
 		t.Fatalf("unexpected output %q", out.Output)
 	}
-	if data, ok := out.Data.(map[string]any); !ok || data["error"] != "boom" {
+	if data, ok := out.Data.(map[string]any); !ok || data["error"] != "boom" || data["subagent_id"] != "sub-123" {
 		t.Fatalf("expected error metadata")
 	}
 }
