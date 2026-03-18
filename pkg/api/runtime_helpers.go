@@ -273,7 +273,7 @@ func mergeCommandRegistrations(fsRegs []commands.CommandRegistration, manual []C
 
 func buildSkillsRegistry(opts Options) (*skills.Registry, []error) {
 	loader := buildLoaderOptions(opts)
-	fsRegs, errs := skills.LoadFromFS(skills.LoaderOptions{
+	outcome := skills.LoadOutcomeFromFS(skills.LoaderOptions{
 		ProjectRoot: loader.ProjectRoot,
 		ConfigRoot:  loader.ConfigRoot,
 		UserHome:    loader.UserHome,
@@ -282,6 +282,14 @@ func buildSkillsRegistry(opts Options) (*skills.Registry, []error) {
 		Recursive:   loader.SkillsRec,
 		FS:          loader.fs,
 	})
+	var (
+		fsRegs []skills.SkillRegistration
+		errs   []error
+	)
+	if outcome != nil {
+		fsRegs = outcome.Registrations
+		errs = outcome.Errors
+	}
 
 	merged := mergeSkillRegistrations(fsRegs, opts.Skills, &errs)
 

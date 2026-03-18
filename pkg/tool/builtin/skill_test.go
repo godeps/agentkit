@@ -94,6 +94,24 @@ func TestSkillToolDefaultActivationProviderUsesContext(t *testing.T) {
 	}
 }
 
+func TestSkillToolExecutesByNameCaseInsensitive(t *testing.T) {
+	reg := skills.NewRegistry()
+	err := reg.Register(skills.Definition{Name: "alpha-skill"}, skills.HandlerFunc(func(ctx context.Context, ac skills.ActivationContext) (skills.Result, error) {
+		return skills.Result{Skill: "alpha-skill", Output: "ok"}, nil
+	}))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	tool := NewSkillTool(reg, nil)
+	res, err := tool.Execute(context.Background(), map[string]interface{}{"command": "ALPHA-SKILL"})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if res.Output != "ok" {
+		t.Fatalf("unexpected output %q", res.Output)
+	}
+}
+
 type skillStringer struct{}
 
 func (skillStringer) String() string { return "stringer-output" }

@@ -256,6 +256,80 @@ func TestLoadFromFSRecursiveToggle(t *testing.T) {
 	}
 }
 
+func TestLoadFromFSDuplicateNamesAcrossRoots(t *testing.T) {
+	isolateAgentsSkillsHome(t)
+	root := t.TempDir()
+	dirA := filepath.Join(root, "ext-a")
+	dirB := filepath.Join(root, "ext-b")
+	writeSkill(t, filepath.Join(dirA, "dup", "SKILL.md"), "dup", "a")
+	writeSkill(t, filepath.Join(dirB, "dup", "SKILL.md"), "dup", "b")
+
+	regs, errs := LoadFromFS(LoaderOptions{
+		ProjectRoot: root,
+		Directories: []string{dirA, dirB},
+	})
+	if len(regs) != 1 {
+		t.Fatalf("expected 1 registration, got %d", len(regs))
+	}
+	if len(errs) == 0 {
+		t.Fatalf("expected duplicate warning")
+	}
+	if regs[0].Definition.Name != "dup" {
+		t.Fatalf("unexpected registration %+v", regs[0].Definition)
+	}
+}
+
+func TestLoadOutcomeCarriesRegistrationsAndErrors(t *testing.T) {
+	isolateAgentsSkillsHome(t)
+	root := t.TempDir()
+	dirA := filepath.Join(root, "ext-a")
+	dirB := filepath.Join(root, "ext-b")
+	writeSkill(t, filepath.Join(dirA, "dup", "SKILL.md"), "dup", "a")
+	writeSkill(t, filepath.Join(dirB, "dup", "SKILL.md"), "dup", "b")
+
+	outcome := LoadOutcomeFromFS(LoaderOptions{
+		ProjectRoot: root,
+		Directories: []string{dirA, dirB},
+	})
+	if outcome == nil {
+		t.Fatal("expected outcome")
+	}
+	if len(outcome.Registrations) != 1 {
+		t.Fatalf("expected 1 registration, got %d", len(outcome.Registrations))
+	}
+	if len(outcome.Errors) == 0 {
+		t.Fatalf("expected duplicate error")
+	}
+}
+
+func TestLoadFromFSAddsCanonicalSkillMetadata(t *testing.T) {
+	isolateAgentsSkillsHome(t)
+	root := t.TempDir()
+	skillPath := filepath.Join(root, ".claude", "skills", "alpha", "SKILL.md")
+	writeSkill(t, skillPath, "alpha", "body")
+
+	regs, errs := LoadFromFS(LoaderOptions{ProjectRoot: root})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(regs) != 1 {
+		t.Fatalf("expected 1 registration, got %d", len(regs))
+	}
+	meta := regs[0].Definition.Metadata
+	if meta[MetadataKeySkillPath] != skillPath {
+		t.Fatalf("unexpected path metadata %#v", meta)
+	}
+	if meta[MetadataKeySkillScope] != string(SkillScopeRepo) {
+		t.Fatalf("unexpected scope metadata %#v", meta)
+	}
+	if meta[MetadataKeySkillOrigin] != "filesystem" {
+		t.Fatalf("unexpected origin metadata %#v", meta)
+	}
+	if meta[MetadataKeySkillID] == "" {
+		t.Fatalf("expected non-empty skill id metadata %#v", meta)
+	}
+}
+
 func TestLoadFromFSWithConfigRoot(t *testing.T) {
 	isolateAgentsSkillsHome(t)
 	root := t.TempDir()

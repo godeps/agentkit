@@ -158,14 +158,15 @@ func isValidSkillName(name string) bool {
 	return skillNameRegexp.MatchString(strings.TrimSpace(name))
 }
 
-// LoadFromFS loads skills from the filesystem. Errors are aggregated so one
-// broken file will not block others. Duplicate names are skipped with a
-// warning entry in the error list.
-func LoadFromFS(opts LoaderOptions) ([]SkillRegistration, []error) {
+// LoadOutcomeFromFS loads skills from the filesystem and returns the structured
+// discovery outcome. Errors are aggregated so one broken file will not block
+// others. Duplicate names are skipped with a warning entry in the error list.
+func LoadOutcomeFromFS(opts LoaderOptions) *SkillLoadOutcome {
 	var (
 		registrations []SkillRegistration
 		errs          []error
 		allFiles      []SkillFile
+		origins       = map[string]LoadOrigin{}
 	)
 
 	fsLayer := opts.FS
@@ -186,7 +187,7 @@ func LoadFromFS(opts LoaderOptions) ([]SkillRegistration, []error) {
 	}
 
 	if len(allFiles) == 0 {
-		return nil, errs
+		return &SkillLoadOutcome{Errors: errs}
 	}
 
 	sort.Slice(allFiles, func(i, j int) bool {
@@ -214,9 +215,29 @@ func LoadFromFS(opts LoaderOptions) ([]SkillRegistration, []error) {
 			Handler:    buildHandler(file, ops),
 		}
 		registrations = append(registrations, reg)
+		origins[def.Name] = LoadOrigin{
+			Path:   file.Path,
+			Scope:  classifySkillScope(file.Path, opts),
+			Origin: "filesystem",
+		}
 	}
 
-	return registrations, errs
+	return &SkillLoadOutcome{
+		Registrations: registrations,
+		Errors:        errs,
+		Origins:       origins,
+	}
+}
+
+// LoadFromFS loads skills from the filesystem. Errors are aggregated so one
+// broken file will not block others. Duplicate names are skipped with a
+// warning entry in the error list.
+func LoadFromFS(opts LoaderOptions) ([]SkillRegistration, []error) {
+	outcome := LoadOutcomeFromFS(opts)
+	if outcome == nil {
+		return nil, nil
+	}
+	return outcome.Registrations, outcome.Errors
 }
 
 func loadSkillDir(root string, recursive bool, fsLayer *config.FS) ([]SkillFile, []error) {
@@ -566,9 +587,72 @@ func buildDefinitionMetadata(file SkillFile) map[string]string {
 			meta = map[string]string{}
 		}
 		meta["source"] = file.Path
+		meta[MetadataKeySkillPath] = file.Path
+		meta[MetadataKeySkillOrigin] = "filesystem"
+		meta[MetadataKeySkillID] = canonicalSkillID(file)
+		meta[MetadataKeySkillScope] = string(classifySkillScopeFromPath(file.Path))
 	}
 
 	return meta
+}
+
+func canonicalSkillID(file SkillFile) string {
+	name := strings.TrimSpace(file.Metadata.Name)
+	path := filepath.Clean(strings.TrimSpace(file.Path))
+	switch {
+	case name != "" && path != "":
+		return name + "::" + path
+	case name != "":
+		return name
+	default:
+		return path
+	}
+}
+
+func classifySkillScopeFromPath(path string) SkillScope {
+	clean := filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
+	switch {
+	case strings.Contains(clean, "/.claude/skills/"):
+		return SkillScopeRepo
+	case strings.Contains(clean, "/.agents/skills/"):
+		return SkillScopeUser
+	default:
+		return SkillScopeCustom
+	}
+}
+
+func classifySkillScope(path string, opts LoaderOptions) SkillScope {
+	clean := filepath.Clean(strings.TrimSpace(path))
+	if clean == "" {
+		return SkillScopeCustom
+	}
+	configRoot := resolveConfigRoot(opts.ProjectRoot, opts.ConfigRoot)
+	if configRoot != "" {
+		repoRoot := filepath.Join(configRoot, "skills")
+		if pathWithinRoot(clean, repoRoot) {
+			return SkillScopeRepo
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		userRoot := filepath.Join(home, ".agents", "skills")
+		if pathWithinRoot(clean, userRoot) {
+			return SkillScopeUser
+		}
+	}
+	return SkillScopeCustom
+}
+
+func pathWithinRoot(path, root string) bool {
+	path = filepath.Clean(strings.TrimSpace(path))
+	root = filepath.Clean(strings.TrimSpace(root))
+	if path == "" || root == "" {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 func resolveFileOps(fsLayer *config.FS) fileOps {
