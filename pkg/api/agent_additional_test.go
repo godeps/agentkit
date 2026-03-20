@@ -376,6 +376,96 @@ func TestRuntimeToolExecutorEnforcesResourceLimits(t *testing.T) {
 	}
 }
 
+func TestRuntimeToolExecutorWhitelistRejectionAppendsHistory(t *testing.T) {
+	hist := message.NewHistory()
+	hist.Append(message.Message{
+		Role: "assistant",
+		ToolCalls: []message.ToolCall{{
+			ID:   "call_1",
+			Name: "echo",
+		}},
+	})
+
+	rtExec := &runtimeToolExecutor{
+		executor:  tool.NewExecutor(tool.NewRegistry(), nil),
+		hooks:     &runtimeHookAdapter{},
+		history:   hist,
+		allow:     map[string]struct{}{"other": {}},
+		sessionID: "s1",
+	}
+
+	_, err := rtExec.Execute(context.Background(), agent.ToolCall{
+		ID:    "call_1",
+		Name:  "echo",
+		Input: map[string]any{"text": "hi"},
+	}, agent.NewContext())
+	if err == nil {
+		t.Fatal("expected whitelist rejection")
+	}
+
+	msgs := hist.All()
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 history messages, got %d", len(msgs))
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role != "tool" {
+		t.Fatalf("expected tool message, got role %q", last.Role)
+	}
+	if len(last.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call result, got %d", len(last.ToolCalls))
+	}
+	if last.ToolCalls[0].ID != "call_1" {
+		t.Fatalf("expected tool call id call_1, got %q", last.ToolCalls[0].ID)
+	}
+	if !strings.Contains(last.ToolCalls[0].Result, "not whitelisted") {
+		t.Fatalf("expected whitelist error in result, got %q", last.ToolCalls[0].Result)
+	}
+}
+
+func TestRuntimeToolExecutorNilExecutorAppendsHistory(t *testing.T) {
+	hist := message.NewHistory()
+	hist.Append(message.Message{
+		Role: "assistant",
+		ToolCalls: []message.ToolCall{{
+			ID:   "call_2",
+			Name: "echo",
+		}},
+	})
+
+	rtExec := &runtimeToolExecutor{
+		hooks:     &runtimeHookAdapter{},
+		history:   hist,
+		sessionID: "s2",
+	}
+
+	_, err := rtExec.Execute(context.Background(), agent.ToolCall{
+		ID:    "call_2",
+		Name:  "echo",
+		Input: map[string]any{"text": "hi"},
+	}, agent.NewContext())
+	if err == nil {
+		t.Fatal("expected nil executor error")
+	}
+
+	msgs := hist.All()
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 history messages, got %d", len(msgs))
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role != "tool" {
+		t.Fatalf("expected tool message, got role %q", last.Role)
+	}
+	if len(last.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call result, got %d", len(last.ToolCalls))
+	}
+	if last.ToolCalls[0].ID != "call_2" {
+		t.Fatalf("expected tool call id call_2, got %q", last.ToolCalls[0].ID)
+	}
+	if !strings.Contains(last.ToolCalls[0].Result, "not initialised") {
+		t.Fatalf("expected executor error in result, got %q", last.ToolCalls[0].Result)
+	}
+}
+
 func TestAvailableToolsNilRegistry(t *testing.T) {
 	if defs := availableTools(nil, nil); defs != nil {
 		t.Fatalf("expected nil definitions, got %+v", defs)

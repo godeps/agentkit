@@ -1254,6 +1254,28 @@ type runtimeToolExecutor struct {
 	permissionResolver tool.PermissionResolver
 }
 
+func (t *runtimeToolExecutor) appendToolResult(call agent.ToolCall, content string, blocks []model.ContentBlock) {
+	if t.history == nil {
+		return
+	}
+	t.history.Append(message.Message{
+		Role: "tool",
+		ToolCalls: []message.ToolCall{{
+			ID:     call.ID,
+			Name:   call.Name,
+			Result: content,
+		}},
+	})
+	if len(blocks) == 0 {
+		return
+	}
+	t.history.Append(message.Message{
+		Role:          "user",
+		Content:       fmt.Sprintf("[multimodal content from tool: %s]", call.Name),
+		ContentBlocks: convertAPIContentBlocks(blocks),
+	})
+}
+
 func (t *runtimeToolExecutor) measureUsage() sandbox.ResourceUsage {
 	var stats runtime.MemStats
 	runtime.ReadMemStats(&stats)
@@ -1286,10 +1308,14 @@ func (t *runtimeToolExecutor) isAllowed(ctx context.Context, name string) bool {
 
 func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, _ *agent.Context) (agent.ToolResult, error) {
 	if t.executor == nil {
-		return agent.ToolResult{}, errors.New("tool executor not initialised")
+		err := errors.New("tool executor not initialised")
+		t.appendToolResult(call, fmt.Sprintf(`{"error":%q}`, err.Error()), nil)
+		return agent.ToolResult{}, err
 	}
 	if !t.isAllowed(ctx, call.Name) {
-		return agent.ToolResult{}, fmt.Errorf("tool %s is not whitelisted", call.Name)
+		err := fmt.Errorf("tool %s is not whitelisted", call.Name)
+		t.appendToolResult(call, fmt.Sprintf(`{"error":%q}`, err.Error()), nil)
+		return agent.ToolResult{}, err
 	}
 
 	// Defensive check: if tool call has empty/nil arguments but the tool requires
@@ -1304,43 +1330,13 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 							"the API proxy likely stripped tool_use.input — check proxy configuration",
 						call.Name, schema.Required)
 					log.Printf("WARNING: %s (id=%s)", errMsg, call.ID)
-					if t.history != nil {
-						t.history.Append(message.Message{
-							Role: "tool",
-							ToolCalls: []message.ToolCall{{
-								ID:     call.ID,
-								Name:   call.Name,
-								Result: errMsg,
-							}},
-						})
-					}
+					t.appendToolResult(call, errMsg, nil)
 					return agent.ToolResult{
 						Name:     call.Name,
 						Output:   errMsg,
 						Metadata: map[string]any{"error": "empty_arguments"},
 					}, nil
 				}
-			}
-		}
-	}
-
-	// Helper to append tool result to history.
-	appendToolResult := func(content string, blocks []model.ContentBlock) {
-		if t.history != nil {
-			t.history.Append(message.Message{
-				Role: "tool",
-				ToolCalls: []message.ToolCall{{
-					ID:     call.ID,
-					Name:   call.Name,
-					Result: content,
-				}},
-			})
-			if len(blocks) > 0 {
-				t.history.Append(message.Message{
-					Role:          "user",
-					Content:       fmt.Sprintf("[multimodal content from tool: %s]", call.Name),
-					ContentBlocks: convertAPIContentBlocks(blocks),
-				})
 			}
 		}
 	}
@@ -1378,7 +1374,7 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 	if preErr != nil {
 		// Hook denied execution - still need to add tool_result to history
 		errContent := fmt.Sprintf(`{"error":%q}`, preErr.Error())
-		appendToolResult(errContent, nil)
+		t.appendToolResult(call, errContent, nil)
 		return agent.ToolResult{Name: call.Name, Output: errContent, Metadata: map[string]any{"error": preErr.Error()}}, preErr
 	}
 	if params != nil {
@@ -1439,11 +1435,11 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 
 	if hookErr := t.hooks.PostToolUse(ctx, coreToolResultPayload(call, result, err)); hookErr != nil && err == nil {
 		// Hook failed - still need to add tool_result to history
-		appendToolResult(content, blocks)
+		t.appendToolResult(call, content, blocks)
 		return toolResult, hookErr
 	}
 
-	appendToolResult(content, blocks)
+	t.appendToolResult(call, content, blocks)
 	return toolResult, err
 }
 
