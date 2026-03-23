@@ -203,7 +203,7 @@ func TestExtractPromptSkillInvocations(t *testing.T) {
 		return name == "tag"
 	}
 
-	forced, cleaned, missing := extractPromptSkillInvocations(
+	forced, cleaned := extractPromptSkillInvocations(
 		"/tag keep\n$ai-sdk /yt-dlp build this\n$ai-sdk",
 		skillLookup,
 		commandLookup,
@@ -215,16 +215,13 @@ func TestExtractPromptSkillInvocations(t *testing.T) {
 	if got := cleaned; got != "/tag keep\nbuild this" {
 		t.Fatalf("unexpected cleaned prompt %q", got)
 	}
-	if len(missing) != 0 {
-		t.Fatalf("unexpected missing skills: %v", missing)
-	}
 }
 
-func TestExtractPromptSkillInvocationsTreatsUnknownSlashAsSkill(t *testing.T) {
+func TestExtractPromptSkillInvocationsKeepsUnknownTokens(t *testing.T) {
 	t.Parallel()
 
-	forced, cleaned, missing := extractPromptSkillInvocations(
-		"/unknown-skill inspect system",
+	forced, cleaned := extractPromptSkillInvocations(
+		"/unknown-skill inspect system\n$jobId template variable",
 		func(string) bool { return false },
 		func(string) bool { return false },
 	)
@@ -232,10 +229,7 @@ func TestExtractPromptSkillInvocationsTreatsUnknownSlashAsSkill(t *testing.T) {
 	if len(forced) != 0 {
 		t.Fatalf("expected no resolved skills, got %v", forced)
 	}
-	if got := cleaned; got != "inspect system" {
+	if got := cleaned; got != "/unknown-skill inspect system\n$jobId template variable" {
 		t.Fatalf("unexpected cleaned prompt %q", got)
-	}
-	if len(missing) != 1 || missing[0] != "unknown-skill" {
-		t.Fatalf("unexpected missing skills: %v", missing)
 	}
 }

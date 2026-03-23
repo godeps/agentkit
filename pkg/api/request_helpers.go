@@ -32,14 +32,12 @@ func removeCommandLines(prompt string, invs []commands.Invocation) string {
 	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
-func extractPromptSkillInvocations(prompt string, skillExists func(string) bool, commandExists func(string) bool) ([]string, string, []string) {
+func extractPromptSkillInvocations(prompt string, skillExists func(string) bool, commandExists func(string) bool) ([]string, string) {
 	if strings.TrimSpace(prompt) == "" {
-		return nil, prompt, nil
+		return nil, prompt
 	}
 	var forced []string
-	var missing []string
 	forcedSeen := map[string]struct{}{}
-	missingSeen := map[string]struct{}{}
 	lines := strings.Split(prompt, "\n")
 	cleanedLines := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -66,14 +64,11 @@ func extractPromptSkillInvocations(prompt string, skillExists func(string) bool,
 				}
 				continue
 			}
-			if _, seen := missingSeen[name]; !seen {
-				missingSeen[name] = struct{}{}
-				missing = append(missing, name)
-			}
+			kept = append(kept, field)
 		}
 		cleanedLines = append(cleanedLines, strings.Join(kept, " "))
 	}
-	return forced, strings.TrimSpace(strings.Join(cleanedLines, "\n")), missing
+	return forced, strings.TrimSpace(strings.Join(cleanedLines, "\n"))
 }
 
 func parsePromptSkillMarker(token string) (string, bool) {
@@ -91,17 +86,6 @@ func parsePromptSkillMarker(token string) (string, bool) {
 		return "", false
 	}
 	return name, true
-}
-
-func unknownForcedSkillsError(names []string) error {
-	switch len(names) {
-	case 0:
-		return nil
-	case 1:
-		return fmt.Errorf("api: unknown skill %q", names[0])
-	default:
-		return fmt.Errorf("api: unknown skills %s", strings.Join(names, ", "))
-	}
 }
 
 func applyPromptMetadata(prompt string, meta map[string]any) string {
