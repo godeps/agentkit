@@ -1,6 +1,9 @@
 package api
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Anthropic-compatible SSE event types.
 const (
@@ -33,7 +36,8 @@ const (
 // StreamEvent represents a single SSE dispatch compatible with Anthropic's schema
 // while carrying additional metadata needed by the agent runtime.
 type StreamEvent struct {
-	Type string `json:"type"` // Type identifies the concrete SSE event kind.
+	Type      string    `json:"type"`                // Type identifies the concrete SSE event kind.
+	Timestamp time.Time `json:"timestamp,omitempty"` // Timestamp helps unify stream events with debug timelines.
 
 	// Anthropic-compatible payloads.
 	Message      *Message      `json:"message,omitempty"`       // Message holds the envelope for message_* events.

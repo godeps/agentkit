@@ -104,6 +104,10 @@ func (a *RuntimeAdapter) RunStream(ctx context.Context, sessionID, prompt string
 	return a.runtime.RunStream(ctx, api.Request{Prompt: prompt, SessionID: sessionID})
 }
 
+func (a *RuntimeAdapter) Timeline(resp *api.Response) []api.TimelineEntry {
+	return api.BuildTimeline(resp)
+}
+
 func (a *RuntimeAdapter) ModelTurnCount(sessionID string) int {
 	if a == nil {
 		return 0

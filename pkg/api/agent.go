@@ -720,6 +720,9 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 	if len(extras) > 0 {
 		chainItems = append(chainItems, extras...)
 	}
+	if len(chainItems) > 0 && prep.recorder != nil {
+		prep.recorder.Record(coreevents.Event{Type: coreevents.EventType(TimelineEventMiddleware)})
+	}
 	chain := middleware.NewChain(chainItems, middleware.WithTimeout(rt.opts.MiddlewareTimeout))
 	ag, err := agent.New(modelAdapter, toolExec, agent.Options{
 		MaxIterations: rt.opts.MaxIterations,
@@ -807,6 +810,7 @@ func (rt *Runtime) buildResponse(prep preparedRun, result runResult) *Response {
 		SandboxSnapshot: rt.sandboxReport(),
 		Tags:            maps.Clone(prep.normalized.Tags),
 	}
+	resp.Timeline = BuildTimeline(resp)
 	return resp
 }
 
@@ -842,6 +846,9 @@ func (rt *Runtime) applyOutputPolicy(prep preparedRun, result *Result) *Result {
 	})
 	if err != nil || adjusted == nil {
 		return result
+	}
+	if prep.recorder != nil {
+		prep.recorder.Record(coreevents.Event{Type: coreevents.EventType(TimelineEventPolicy)})
 	}
 	result.Envelope = adjusted
 	result.Output = adjusted.Text
@@ -1144,7 +1151,10 @@ func (rt *Runtime) resumePlan(ctx context.Context, checkpointID string, state pl
 		return nil, err
 	}
 	res.checkpointID = checkpointID
-	return rt.buildResponse(prep, res), nil
+	resp := rt.buildResponse(prep, res)
+	resp.HookEvents = append(resp.HookEvents, coreevents.Event{Type: coreevents.EventType(TimelineEventResume), Timestamp: time.Now().UTC()})
+	resp.Timeline = BuildTimeline(resp)
+	return resp, nil
 }
 
 func (rt *Runtime) resumeApproval(ctx context.Context, checkpointID string, state approvalCheckpointState) (*Response, error) {
@@ -1172,7 +1182,10 @@ func (rt *Runtime) resumeApproval(ctx context.Context, checkpointID string, stat
 		return nil, err
 	}
 	res.checkpointID = checkpointID
-	return rt.buildResponse(prep, res), nil
+	resp := rt.buildResponse(prep, res)
+	resp.HookEvents = append(resp.HookEvents, coreevents.Event{Type: coreevents.EventType(TimelineEventResume), Timestamp: time.Now().UTC()})
+	resp.Timeline = BuildTimeline(resp)
+	return resp, nil
 }
 
 func (rt *Runtime) executeCommands(ctx context.Context, prompt string, req *Request) ([]CommandExecution, string, error) {
@@ -1628,6 +1641,9 @@ func (m *conversationModel) Generate(ctx context.Context, c *agent.Context) (*ag
 	if m.outputMode != OutputSchemaModePostProcess {
 		req.ResponseFormat = cloneResponseFormat(m.outputSchema)
 	}
+	if m.recorder != nil {
+		m.recorder.Record(coreevents.Event{Type: coreevents.EventType(TimelineEventModelRequest)})
+	}
 	if m.modelRequestPolicy != nil {
 		adjusted, err := m.modelRequestPolicy.ApplyModelRequest(ctx, ModelRequestPolicyInput{
 			Request:   req,
@@ -1640,6 +1656,9 @@ func (m *conversationModel) Generate(ctx context.Context, c *agent.Context) (*ag
 			return nil, err
 		}
 		req = adjusted
+		if m.recorder != nil {
+			m.recorder.Record(coreevents.Event{Type: coreevents.EventType(TimelineEventPolicy)})
+		}
 	}
 
 	// Populate middleware state with model request if available
@@ -1668,6 +1687,9 @@ func (m *conversationModel) Generate(ctx context.Context, c *agent.Context) (*ag
 	}
 	m.usage = resp.Usage
 	m.stopReason = resp.StopReason
+	if m.recorder != nil {
+		m.recorder.Record(coreevents.Event{Type: coreevents.EventType(TimelineEventModelResponse)})
+	}
 
 	// Populate middleware state with model response and usage
 	if st, ok := ctx.Value(model.MiddlewareStateKey).(*middleware.State); ok && st != nil {
@@ -2096,7 +2118,10 @@ func buildPermissionResolver(hooks *runtimeHookAdapter, handler PermissionReques
 			}
 		}
 
-		return decision, fmt.Errorf("%w: %s", ErrToolUseRequiresApproval, call.Name)
+		if record != nil {
+			return decision, fmt.Errorf("%w: %s", ErrToolUseRequiresApproval, call.Name)
+		}
+		return decision, nil
 	}
 }
 
