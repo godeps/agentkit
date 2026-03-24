@@ -615,21 +615,26 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 
 	hookAdapter := &runtimeHookAdapter{executor: rt.hooks, recorder: prep.recorder}
 	modelAdapter := &conversationModel{
-		base:          selectedModel,
-		history:       prep.history,
-		prompt:        prep.prompt,
-		contentBlocks: prep.contentBlocks,
-		trimmer:       rt.newTrimmer(),
-		tools:         availableTools(rt.registry, prep.toolWhitelist),
-		systemPrompt:  rt.opts.SystemPrompt,
-		outputSchema:  effectiveOutputSchema(prep.normalized.OutputSchema, rt.opts.OutputSchema),
-		outputMode:    effectiveOutputSchemaMode(prep.normalized.OutputSchemaMode, rt.opts.OutputSchemaMode),
-		rulesLoader:   rt.rulesLoader,
-		enableCache:   enableCache,
-		hooks:         hookAdapter,
-		recorder:      prep.recorder,
-		compactor:     rt.compactor,
-		sessionID:     prep.normalized.SessionID,
+		base:                selectedModel,
+		history:             prep.history,
+		prompt:              prep.prompt,
+		contentBlocks:       prep.contentBlocks,
+		trimmer:             rt.newTrimmer(),
+		tools:               availableTools(rt.registry, prep.toolWhitelist),
+		systemPrompt:        rt.opts.SystemPrompt,
+		outputSchema:        effectiveOutputSchema(prep.normalized.OutputSchema, rt.opts.OutputSchema),
+		outputMode:          effectiveOutputSchemaMode(prep.normalized.OutputSchemaMode, rt.opts.OutputSchemaMode),
+		rulesLoader:         rt.rulesLoader,
+		enableCache:         enableCache,
+		hooks:               hookAdapter,
+		recorder:            prep.recorder,
+		compactor:           rt.compactor,
+		sessionID:           prep.normalized.SessionID,
+		requestID:           prep.normalized.RequestID,
+		metadata:            maps.Clone(prep.normalized.Metadata),
+		modelRequestPolicy:  rt.opts.ModelRequestPolicy,
+		toolSelectionPolicy: rt.opts.ToolSelectionPolicy,
+		iterationPolicy:     rt.opts.IterationPolicy,
 	}
 
 	toolExec := &runtimeToolExecutor{
@@ -723,7 +728,7 @@ func (rt *Runtime) buildResponse(prep preparedRun, result runResult) *Response {
 	resp := &Response{
 		Mode:            prep.mode,
 		RequestID:       prep.normalized.RequestID,
-		Result:          convertRunResult(result),
+		Result:          rt.applyOutputPolicy(prep, convertRunResult(result)),
 		CommandResults:  prep.commandResults,
 		SkillResults:    prep.skillResults,
 		Subagent:        prep.subagentResult,
@@ -734,6 +739,30 @@ func (rt *Runtime) buildResponse(prep preparedRun, result runResult) *Response {
 		Tags:            maps.Clone(prep.normalized.Tags),
 	}
 	return resp
+}
+
+func (rt *Runtime) applyOutputPolicy(prep preparedRun, result *Result) *Result {
+	if result == nil || rt.opts.OutputPolicy == nil {
+		return result
+	}
+	env := cloneOrchestrationEnvelope(result.Envelope)
+	if env == nil {
+		env = &orchestration.ResultEnvelope{Text: result.Output}
+	}
+	adjusted, err := rt.opts.OutputPolicy.ApplyOutput(prep.ctx, OutputPolicyInput{
+		Envelope:   env,
+		Usage:      result.Usage,
+		StopReason: result.StopReason,
+		SessionID:  prep.normalized.SessionID,
+		RequestID:  prep.normalized.RequestID,
+		Metadata:   maps.Clone(prep.normalized.Metadata),
+	})
+	if err != nil || adjusted == nil {
+		return result
+	}
+	result.Envelope = adjusted
+	result.Output = adjusted.Text
+	return result
 }
 
 func (rt *Runtime) sandboxReport() SandboxReport {
@@ -1232,28 +1261,37 @@ func effectiveOutputSchemaMode(requestMode, defaultMode OutputSchemaMode) Output
 // ----------------- adapters -----------------
 
 type conversationModel struct {
-	base          model.Model
-	history       *message.History
-	prompt        string
-	contentBlocks []model.ContentBlock
-	trimmer       *message.Trimmer
-	tools         []model.ToolDefinition
-	systemPrompt  string
-	outputSchema  *model.ResponseFormat
-	outputMode    OutputSchemaMode
-	rulesLoader   *config.RulesLoader
-	enableCache   bool // Enable prompt caching for this conversation
-	usage         model.Usage
-	stopReason    string
-	hooks         *runtimeHookAdapter
-	recorder      *hookRecorder
-	compactor     *compactor
-	sessionID     string
+	base                model.Model
+	history             *message.History
+	prompt              string
+	contentBlocks       []model.ContentBlock
+	trimmer             *message.Trimmer
+	tools               []model.ToolDefinition
+	systemPrompt        string
+	outputSchema        *model.ResponseFormat
+	outputMode          OutputSchemaMode
+	rulesLoader         *config.RulesLoader
+	enableCache         bool // Enable prompt caching for this conversation
+	usage               model.Usage
+	stopReason          string
+	hooks               *runtimeHookAdapter
+	recorder            *hookRecorder
+	compactor           *compactor
+	sessionID           string
+	requestID           string
+	metadata            map[string]any
+	modelRequestPolicy  ModelRequestPolicy
+	toolSelectionPolicy ToolSelectionPolicy
+	iterationPolicy     IterationPolicy
 }
 
-func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*agent.ModelOutput, error) {
+func (m *conversationModel) Generate(ctx context.Context, c *agent.Context) (*agent.ModelOutput, error) {
 	if m.base == nil {
 		return nil, errors.New("model is nil")
+	}
+	iteration := 0
+	if c != nil {
+		iteration = c.Iteration
 	}
 
 	if strings.TrimSpace(m.prompt) != "" || len(m.contentBlocks) > 0 {
@@ -1285,9 +1323,43 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 			systemPrompt = fmt.Sprintf("%s\n\n## Project Rules\n\n%s", systemPrompt, rules)
 		}
 	}
+	if m.iterationPolicy != nil {
+		decision, err := m.iterationPolicy.DecideIteration(ctx, IterationPolicyInput{
+			Iteration: iteration,
+			SessionID: m.sessionID,
+			RequestID: m.requestID,
+			Metadata:  maps.Clone(m.metadata),
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !decision.Continue {
+			m.stopReason = strings.TrimSpace(decision.StopReason)
+			return &agent.ModelOutput{
+				Content: strings.TrimSpace(decision.Output),
+				Done:    true,
+			}, nil
+		}
+	}
+
+	tools := cloneToolDefinitions(m.tools)
+	if m.toolSelectionPolicy != nil {
+		selected, err := m.toolSelectionPolicy.SelectTools(ctx, ToolSelectionPolicyInput{
+			Tools:     cloneToolDefinitions(m.tools),
+			Iteration: iteration,
+			SessionID: m.sessionID,
+			RequestID: m.requestID,
+			Metadata:  maps.Clone(m.metadata),
+		})
+		if err != nil {
+			return nil, err
+		}
+		tools = cloneToolDefinitions(selected)
+	}
+
 	req := model.Request{
 		Messages:          convertMessages(snapshot),
-		Tools:             m.tools,
+		Tools:             tools,
 		System:            systemPrompt,
 		MaxTokens:         0,
 		Model:             "",
@@ -1296,6 +1368,19 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 	}
 	if m.outputMode != OutputSchemaModePostProcess {
 		req.ResponseFormat = cloneResponseFormat(m.outputSchema)
+	}
+	if m.modelRequestPolicy != nil {
+		adjusted, err := m.modelRequestPolicy.ApplyModelRequest(ctx, ModelRequestPolicyInput{
+			Request:   req,
+			Iteration: iteration,
+			SessionID: m.sessionID,
+			RequestID: m.requestID,
+			Metadata:  maps.Clone(m.metadata),
+		})
+		if err != nil {
+			return nil, err
+		}
+		req = adjusted
 	}
 
 	// Populate middleware state with model request if available

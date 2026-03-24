@@ -204,7 +204,11 @@ type Options struct {
 	OutputSchema *model.ResponseFormat
 	// OutputSchemaMode controls whether OutputSchema is applied inline during the
 	// agent loop or via a separate post-processing pass. Empty defaults to inline.
-	OutputSchemaMode OutputSchemaMode
+	OutputSchemaMode    OutputSchemaMode
+	ModelRequestPolicy  ModelRequestPolicy
+	ToolSelectionPolicy ToolSelectionPolicy
+	IterationPolicy     IterationPolicy
+	OutputPolicy        OutputPolicy
 
 	SystemPrompt string
 	RulesEnabled *bool // nil = 默认启用，false = 禁用
