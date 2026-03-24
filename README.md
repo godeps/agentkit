@@ -42,6 +42,9 @@ agentkit is a modular agent development framework that implements core Claude Co
 - `examples/10-hooks` - Hooks lifecycle events
 - `examples/11-reasoning` - Reasoning/thinking model support
 - `examples/12-multimodal` - Image and document input
+- `examples/14-artifact-pipeline` - Artifact-first multimodal pipeline
+- `examples/15-resumable-review` - Checkpointed human review and resume
+- `examples/16-timeline` - Inspect multimodal execution timeline
 
 ### Shared CLI Support
 
