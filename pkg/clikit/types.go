@@ -37,6 +37,8 @@ type RuntimeInfo interface {
 
 type StreamEngine interface {
 	RunStream(ctx context.Context, req api.Request) (<-chan api.StreamEvent, error)
+	Run(ctx context.Context, req api.Request) (*api.Response, error)
+	Resume(ctx context.Context, checkpointID string) (*api.Response, error)
 	ModelTurnCount(sessionID string) int
 	ModelTurnsSince(sessionID string, offset int) []ModelTurnStat
 	RepoRoot() string
@@ -47,4 +49,5 @@ type ReplEngine interface {
 	ModelName() string
 	Skills() []SkillMeta
 	SandboxBackend() string
+	Timeline(resp *api.Response) []api.TimelineEntry
 }

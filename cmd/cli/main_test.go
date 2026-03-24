@@ -36,6 +36,13 @@ func (f *fakeRuntime) RunStream(ctx context.Context, req api.Request) (<-chan ap
 	return ch, nil
 }
 
+func (f *fakeRuntime) Resume(ctx context.Context, checkpointID string) (*api.Response, error) {
+	if f.runFn != nil {
+		return f.runFn(ctx, api.Request{SessionID: checkpointID})
+	}
+	return &api.Response{Result: &api.Result{Output: "resumed"}}, nil
+}
+
 func (f *fakeRuntime) Close() error {
 	if f.closeFn != nil {
 		return f.closeFn()

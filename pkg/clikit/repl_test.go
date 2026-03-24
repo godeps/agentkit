@@ -36,6 +36,14 @@ func (f fakeReplEngine) RunStream(context.Context, api.Request) (<-chan api.Stre
 	panic("unexpected")
 }
 
+func (f fakeReplEngine) Run(context.Context, api.Request) (*api.Response, error) {
+	panic("unexpected")
+}
+
+func (f fakeReplEngine) Resume(context.Context, string) (*api.Response, error) {
+	panic("unexpected")
+}
+
 func (f fakeReplEngine) ModelTurnCount(string) int { return 0 }
 
 func (f fakeReplEngine) ModelTurnsSince(string, int) []ModelTurnStat { return nil }
@@ -48,10 +56,17 @@ func (f fakeReplEngine) Skills() []SkillMeta { return []SkillMeta{{Name: "b"}, {
 
 func (f fakeReplEngine) SandboxBackend() string { return "govm" }
 
+func (f fakeReplEngine) Timeline(resp *api.Response) []api.TimelineEntry {
+	if resp == nil {
+		return nil
+	}
+	return resp.Timeline
+}
+
 func TestHandleCommandListsSkills(t *testing.T) {
 	var out bytes.Buffer
 	sessionID := "s1"
-	handled, quit := handleCommand("/skills", fakeReplEngine{}, &sessionID, &out)
+	handled, quit := handleCommand("/skills", fakeReplEngine{}, &sessionID, &shellState{}, context.Background(), &out, io.Discard)
 	if !handled {
 		t.Fatalf("skills command should be handled")
 	}
@@ -64,19 +79,42 @@ func TestHandleCommandListsSkills(t *testing.T) {
 }
 
 type scriptedReplEngine struct {
-	calls []api.Request
-	fail  bool
+	calls       []api.Request
+	runResponse *api.Response
+	runErr      error
+	resumeIDs   []string
+	resumeResp  *api.Response
+	resumeErr   error
 }
 
 func (s *scriptedReplEngine) RunStream(_ context.Context, req api.Request) (<-chan api.StreamEvent, error) {
+	panic("unexpected stream path")
+}
+
+func (s *scriptedReplEngine) Run(_ context.Context, req api.Request) (*api.Response, error) {
 	s.calls = append(s.calls, req)
-	if s.fail {
-		s.fail = false
-		return nil, io.ErrUnexpectedEOF
+	if s.runErr != nil {
+		err := s.runErr
+		s.runErr = nil
+		return nil, err
 	}
-	ch := make(chan api.StreamEvent)
-	close(ch)
-	return ch, nil
+	if s.runResponse != nil {
+		return s.runResponse, nil
+	}
+	return &api.Response{Result: &api.Result{Output: "ok"}}, nil
+}
+
+func (s *scriptedReplEngine) Resume(_ context.Context, checkpointID string) (*api.Response, error) {
+	s.resumeIDs = append(s.resumeIDs, checkpointID)
+	if s.resumeErr != nil {
+		err := s.resumeErr
+		s.resumeErr = nil
+		return nil, err
+	}
+	if s.resumeResp != nil {
+		return s.resumeResp, nil
+	}
+	return &api.Response{Result: &api.Result{Output: "resumed"}}, nil
 }
 
 func (s *scriptedReplEngine) ModelTurnCount(string) int                   { return 0 }
@@ -85,12 +123,18 @@ func (s *scriptedReplEngine) RepoRoot() string                            { retu
 func (s *scriptedReplEngine) ModelName() string                           { return "model-x" }
 func (s *scriptedReplEngine) Skills() []SkillMeta                         { return []SkillMeta{{Name: "b"}, {Name: "a"}} }
 func (s *scriptedReplEngine) SandboxBackend() string                      { return "govm" }
+func (s *scriptedReplEngine) Timeline(resp *api.Response) []api.TimelineEntry {
+	if resp == nil {
+		return nil
+	}
+	return resp.Timeline
+}
 
 func TestInteractiveShellPrintsStatusAndContinuesAfterErrors(t *testing.T) {
 	in := io.NopCloser(bytes.NewBufferString("/session\nhello\nworld\n/quit\n"))
 	var out bytes.Buffer
 	var errOut bytes.Buffer
-	eng := &scriptedReplEngine{fail: true}
+	eng := &scriptedReplEngine{runErr: io.ErrUnexpectedEOF}
 
 	shell := NewInteractiveShell(InteractiveShellConfig{
 		Engine:            eng,
@@ -166,5 +210,61 @@ func TestInteractiveShellUnknownSlashInputFallsThrough(t *testing.T) {
 func TestIsReadTerminationIgnoresInterrupt(t *testing.T) {
 	if isReadTermination(readline.ErrInterrupt) {
 		t.Fatalf("interrupt should not terminate repl")
+	}
+}
+
+func TestInteractiveShellResumeTimelineAndCheckpointCommands(t *testing.T) {
+	in := io.NopCloser(bytes.NewBufferString("/resume cp-1\n/checkpoint\n/timeline\n/quit\n"))
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	eng := &scriptedReplEngine{
+		resumeResp: &api.Response{
+			Result: &api.Result{
+				Output:       "resumed output",
+				CheckpointID: "cp-2",
+			},
+			Timeline: []api.TimelineEntry{
+				{Kind: api.TimelineKindResume, Source: api.TimelineEventResume},
+				{Kind: api.TimelineKindToolResult, Source: api.EventToolExecutionResult},
+			},
+		},
+	}
+
+	shell := NewInteractiveShell(InteractiveShellConfig{
+		Engine:            eng,
+		InitialSessionID:  "sess-3",
+		TimeoutMs:         100,
+		Verbose:           false,
+		WaterfallMode:     WaterfallModeOff,
+		ShowStatusPerTurn: false,
+	})
+	if err := shell.Run(context.Background(), in, &out, &errOut); err != nil {
+		t.Fatalf("run shell: %v", err)
+	}
+
+	if len(eng.resumeIDs) != 1 || eng.resumeIDs[0] != "cp-1" {
+		t.Fatalf("unexpected resume ids: %+v", eng.resumeIDs)
+	}
+	got := out.String()
+	for _, sub := range []string{"resumed output", "checkpoint: cp-2", "resume", "tool_result"} {
+		if !bytes.Contains([]byte(got), []byte(sub)) {
+			t.Fatalf("missing %q in output: %q", sub, got)
+		}
+	}
+	if errOut.Len() != 0 {
+		t.Fatalf("unexpected stderr: %q", errOut.String())
+	}
+}
+
+func TestHandleCommandTimelineWithoutLastResponse(t *testing.T) {
+	var out bytes.Buffer
+	sessionID := "s1"
+	state := &shellState{}
+	handled, quit := handleCommand("/timeline", fakeReplEngine{}, &sessionID, state, context.Background(), &out, io.Discard)
+	if !handled || quit {
+		t.Fatalf("timeline command should be handled without quit")
+	}
+	if got := out.String(); got != "no timeline available\n" {
+		t.Fatalf("unexpected output: %q", got)
 	}
 }

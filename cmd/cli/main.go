@@ -38,6 +38,7 @@ var validateGovmRuntime = defaultValidateGovmRuntime
 type runtimeClient interface {
 	Run(context.Context, api.Request) (*api.Response, error)
 	RunStream(context.Context, api.Request) (<-chan api.StreamEvent, error)
+	Resume(context.Context, string) (*api.Response, error)
 	Close() error
 }
 

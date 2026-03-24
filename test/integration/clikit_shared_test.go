@@ -30,6 +30,14 @@ func (f fakeSharedEngine) RunStream(context.Context, api.Request) (<-chan api.St
 	return ch, nil
 }
 
+func (f fakeSharedEngine) Run(context.Context, api.Request) (*api.Response, error) {
+	return &api.Response{Result: &api.Result{Output: "ok"}}, nil
+}
+
+func (f fakeSharedEngine) Resume(context.Context, string) (*api.Response, error) {
+	return &api.Response{Result: &api.Result{Output: "resumed"}}, nil
+}
+
 func (f fakeSharedEngine) ModelTurnCount(string) int { return 0 }
 
 func (f fakeSharedEngine) ModelTurnsSince(string, int) []clikit.ModelTurnStat {
@@ -42,6 +50,15 @@ func (f fakeSharedEngine) ModelName() string { return "test-model" }
 
 func (f fakeSharedEngine) Skills() []clikit.SkillMeta {
 	return append([]clikit.SkillMeta(nil), f.skills...)
+}
+
+func (f fakeSharedEngine) SandboxBackend() string { return "host" }
+
+func (f fakeSharedEngine) Timeline(resp *api.Response) []api.TimelineEntry {
+	if resp == nil {
+		return nil
+	}
+	return resp.Timeline
 }
 
 func TestSharedClikitStreamRendersToolProgress(t *testing.T) {

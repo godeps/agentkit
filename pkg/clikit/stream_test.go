@@ -274,6 +274,14 @@ func (errorStreamEngine) RunStream(context.Context, api.Request) (<-chan api.Str
 	return ch, nil
 }
 
+func (errorStreamEngine) Run(context.Context, api.Request) (*api.Response, error) {
+	return &api.Response{Result: &api.Result{Output: "ok"}}, nil
+}
+
+func (errorStreamEngine) Resume(context.Context, string) (*api.Response, error) {
+	return &api.Response{Result: &api.Result{Output: "resumed"}}, nil
+}
+
 func (errorStreamEngine) ModelTurnCount(string) int                   { return 0 }
 func (errorStreamEngine) ModelTurnsSince(string, int) []ModelTurnStat { return nil }
 func (errorStreamEngine) RepoRoot() string                            { return "" }

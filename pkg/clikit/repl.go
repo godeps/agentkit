@@ -26,6 +26,11 @@ type InteractiveShell struct {
 	cfg InteractiveShellConfig
 }
 
+type shellState struct {
+	lastResponse   *api.Response
+	lastCheckpoint string
+}
+
 func NewInteractiveShell(cfg InteractiveShellConfig) *InteractiveShell {
 	return &InteractiveShell{cfg: cfg}
 }
@@ -91,6 +96,7 @@ func (s *InteractiveShell) Run(ctx context.Context, in io.ReadCloser, out, errOu
 	if sessionID == "" {
 		sessionID = uuid.NewString()
 	}
+	state := &shellState{}
 
 	for {
 		if s.cfg.ShowStatusPerTurn {
@@ -113,19 +119,23 @@ func (s *InteractiveShell) Run(ctx context.Context, in io.ReadCloser, out, errOu
 			continue
 		}
 
-		if handled, quit := handleCommand(input, s.cfg.Engine, &sessionID, out); handled {
+		if handled, quit := handleCommand(input, s.cfg.Engine, &sessionID, state, ctx, out, errOut); handled {
 			if quit {
 				return nil
 			}
 			continue
 		}
 
-		if err := RunStream(ctx, out, errOut, s.cfg.Engine, api.Request{
+		resp, err := s.cfg.Engine.Run(ctx, api.Request{
 			Prompt:    input,
 			SessionID: sessionID,
-		}, s.cfg.TimeoutMs, s.cfg.Verbose, s.cfg.WaterfallMode); err != nil {
+		})
+		if err != nil {
 			fmt.Fprintf(errOut, "run failed: %v\n", err)
+			continue
 		}
+		updateShellState(state, resp)
+		renderResponseSummary(out, resp)
 	}
 	fmt.Fprintln(out, "bye")
 	return nil
@@ -144,11 +154,15 @@ func isReadTermination(err error) bool {
 	return errors.Is(err, io.EOF)
 }
 
-func handleCommand(input string, eng ReplEngine, sessionID *string, out io.Writer) (handled bool, quit bool) {
+func handleCommand(input string, eng ReplEngine, sessionID *string, state *shellState, ctx context.Context, out, errOut io.Writer) (handled bool, quit bool) {
 	if out == nil {
 		out = io.Discard
 	}
-	cmd := strings.ToLower(strings.Fields(input)[0])
+	fields := strings.Fields(input)
+	if len(fields) == 0 {
+		return false, false
+	}
+	cmd := strings.ToLower(fields[0])
 	switch cmd {
 	case "/quit", "/exit", "/q":
 		fmt.Fprintln(out, "bye")
@@ -164,7 +178,7 @@ func handleCommand(input string, eng ReplEngine, sessionID *string, out io.Write
 		fmt.Fprintf(out, "session: %s\n", *sessionID)
 		return true, false
 	case "/help":
-		fmt.Fprintln(out, "/skills /new /session /model /help /quit")
+		fmt.Fprintln(out, "/skills /new /session /model /checkpoint /timeline /resume <id> /help /quit")
 		return true, false
 	case "/skills":
 		metas := eng.Skills()
@@ -172,6 +186,39 @@ func handleCommand(input string, eng ReplEngine, sessionID *string, out io.Write
 		for _, m := range metas {
 			fmt.Fprintf(out, "- %s\n", m.Name)
 		}
+		return true, false
+	case "/checkpoint":
+		checkpointID := ""
+		if state != nil {
+			checkpointID = strings.TrimSpace(state.lastCheckpoint)
+		}
+		if checkpointID == "" {
+			fmt.Fprintln(out, "no checkpoint available")
+			return true, false
+		}
+		fmt.Fprintf(out, "checkpoint: %s\n", checkpointID)
+		return true, false
+	case "/timeline":
+		if state == nil || state.lastResponse == nil || len(eng.Timeline(state.lastResponse)) == 0 {
+			fmt.Fprintln(out, "no timeline available")
+			return true, false
+		}
+		printTimeline(out, eng.Timeline(state.lastResponse))
+		return true, false
+	case "/resume":
+		if len(fields) < 2 || strings.TrimSpace(fields[1]) == "" {
+			fmt.Fprintln(out, "usage: /resume <checkpoint-id>")
+			return true, false
+		}
+		resp, err := eng.Resume(ctx, strings.TrimSpace(fields[1]))
+		if err != nil {
+			if errOut != nil {
+				fmt.Fprintf(errOut, "resume failed: %v\n", err)
+			}
+			return true, false
+		}
+		updateShellState(state, resp)
+		renderResponseSummary(out, resp)
 		return true, false
 	}
 	return false, false
@@ -190,4 +237,39 @@ func displayValue(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func updateShellState(state *shellState, resp *api.Response) {
+	if state == nil || resp == nil {
+		return
+	}
+	state.lastResponse = resp
+	if resp.Result != nil && strings.TrimSpace(resp.Result.CheckpointID) != "" {
+		state.lastCheckpoint = strings.TrimSpace(resp.Result.CheckpointID)
+	}
+}
+
+func renderResponseSummary(out io.Writer, resp *api.Response) {
+	if out == nil || resp == nil || resp.Result == nil {
+		return
+	}
+	if text := strings.TrimSpace(resp.Result.Output); text != "" {
+		fmt.Fprintln(out, text)
+	}
+	if checkpointID := strings.TrimSpace(resp.Result.CheckpointID); checkpointID != "" {
+		fmt.Fprintf(out, "checkpoint: %s\n", checkpointID)
+	}
+}
+
+func printTimeline(out io.Writer, timeline []api.TimelineEntry) {
+	if out == nil {
+		return
+	}
+	for _, entry := range timeline {
+		if strings.TrimSpace(entry.Source) != "" {
+			fmt.Fprintf(out, "- %s source=%s\n", entry.Kind, entry.Source)
+			continue
+		}
+		fmt.Fprintf(out, "- %s\n", entry.Kind)
+	}
 }

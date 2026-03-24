@@ -20,6 +20,14 @@ func (fakeStreamRuntime) RunStream(context.Context, api.Request) (<-chan api.Str
 	return ch, nil
 }
 
+func (fakeStreamRuntime) Run(context.Context, api.Request) (*api.Response, error) {
+	return &api.Response{Result: &api.Result{Output: "ok"}}, nil
+}
+
+func (fakeStreamRuntime) Resume(context.Context, string) (*api.Response, error) {
+	return &api.Response{Result: &api.Result{Output: "resumed"}}, nil
+}
+
 func TestRuntimeAdapterExposesModelNameAndRepoRoot(t *testing.T) {
 	recorder := newTurnRecorder()
 	adapter := NewRuntimeAdapter(fakeStreamRuntime{}, RuntimeAdapterConfig{
@@ -124,6 +132,15 @@ func (c *captureRuntime) RunStream(_ context.Context, req api.Request) (<-chan a
 	return ch, nil
 }
 
+func (c *captureRuntime) Run(_ context.Context, req api.Request) (*api.Response, error) {
+	c.req = req
+	return &api.Response{Result: &api.Result{Output: "ok"}}, nil
+}
+
+func (c *captureRuntime) Resume(_ context.Context, checkpointID string) (*api.Response, error) {
+	return &api.Response{Result: &api.Result{Output: checkpointID}}, nil
+}
+
 func TestRuntimeAdapterRunStreamPreservesRequest(t *testing.T) {
 	rt := &captureRuntime{}
 	adapter := NewRuntimeAdapter(rt, RuntimeAdapterConfig{
@@ -156,6 +173,24 @@ func TestRuntimeAdapterRunStreamPreservesRequest(t *testing.T) {
 	}
 	if got := rt.req.Tags["k"]; got != "v" {
 		t.Fatalf("expected tags preserved, got %+v", rt.req.Tags)
+	}
+}
+
+func TestRuntimeAdapterResumePassesCheckpointID(t *testing.T) {
+	rt := &captureRuntime{}
+	adapter := NewRuntimeAdapter(rt, RuntimeAdapterConfig{
+		ProjectRoot:  "/repo",
+		ConfigRoot:   "/cfg",
+		ModelName:    "model-x",
+		TurnRecorder: newTurnRecorder(),
+	})
+
+	resp, err := adapter.Resume(context.Background(), "cp-1")
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if resp == nil || resp.Result == nil || resp.Result.Output != "cp-1" {
+		t.Fatalf("unexpected response: %+v", resp)
 	}
 }
 

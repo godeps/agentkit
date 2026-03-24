@@ -12,6 +12,8 @@ import (
 
 type streamRuntime interface {
 	RunStream(context.Context, api.Request) (<-chan api.StreamEvent, error)
+	Run(context.Context, api.Request) (*api.Response, error)
+	Resume(context.Context, string) (*api.Response, error)
 }
 
 type RuntimeAdapterConfig struct {
@@ -105,6 +107,14 @@ func (a *RuntimeAdapter) RepoRoot() string {
 
 func (a *RuntimeAdapter) RunStream(ctx context.Context, req api.Request) (<-chan api.StreamEvent, error) {
 	return a.runtime.RunStream(ctx, req)
+}
+
+func (a *RuntimeAdapter) Run(ctx context.Context, req api.Request) (*api.Response, error) {
+	return a.runtime.Run(ctx, req)
+}
+
+func (a *RuntimeAdapter) Resume(ctx context.Context, checkpointID string) (*api.Response, error) {
+	return a.runtime.Resume(ctx, checkpointID)
 }
 
 func (a *RuntimeAdapter) Timeline(resp *api.Response) []api.TimelineEntry {
