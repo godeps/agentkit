@@ -138,6 +138,15 @@ func convertToolCalls(calls []message.ToolCall) []model.ToolCall {
 	return out
 }
 
+func cloneToolDefinitions(in []model.ToolDefinition) []model.ToolDefinition {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]model.ToolDefinition, len(in))
+	copy(out, in)
+	return out
+}
+
 func cloneArguments(args map[string]any) map[string]any {
 	if len(args) == 0 {
 		return nil
