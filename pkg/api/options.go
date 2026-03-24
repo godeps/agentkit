@@ -12,17 +12,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/godeps/agentkit/pkg/artifact"
 	"github.com/godeps/agentkit/pkg/config"
 	coreevents "github.com/godeps/agentkit/pkg/core/events"
 	corehooks "github.com/godeps/agentkit/pkg/core/hooks"
 	coremw "github.com/godeps/agentkit/pkg/core/middleware"
-	"github.com/godeps/agentkit/pkg/artifact"
 	"github.com/godeps/agentkit/pkg/middleware"
 	"github.com/godeps/agentkit/pkg/model"
 	"github.com/godeps/agentkit/pkg/pipeline"
 	runtimecache "github.com/godeps/agentkit/pkg/runtime/cache"
-	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/checkpoint"
+	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
 	"github.com/godeps/agentkit/pkg/runtime/subagents"
 	"github.com/godeps/agentkit/pkg/runtime/tasks"
@@ -305,24 +305,24 @@ func DefaultSubagentDefinitions() []subagents.Definition {
 // forwarded to the declarative runtime layers (skills/subagents) while
 // RunContext overrides the agent-level execution knobs.
 type Request struct {
-	Prompt            string
-	ContentBlocks     []model.ContentBlock // Multimodal content; when non-empty, used alongside Prompt
-	Pipeline          *pipeline.Step
-	Mode              ModeContext
-	SessionID         string
+	Prompt               string
+	ContentBlocks        []model.ContentBlock // Multimodal content; when non-empty, used alongside Prompt
+	Pipeline             *pipeline.Step
+	Mode                 ModeContext
+	SessionID            string
 	ResumeFromCheckpoint string
-	RequestID         string    `json:"request_id,omitempty"` // Auto-generated UUID or user-provided
-	Model             ModelTier // Optional: override model tier for this request
-	EnablePromptCache *bool     // Optional: enable prompt caching (nil uses global default)
-	OutputSchema      *model.ResponseFormat
-	OutputSchemaMode  OutputSchemaMode
-	Traits            []string
-	Tags              map[string]string
-	Channels          []string
-	Metadata          map[string]any
-	TargetSubagent    string
-	ToolWhitelist     []string
-	ForceSkills       []string
+	RequestID            string    `json:"request_id,omitempty"` // Auto-generated UUID or user-provided
+	Model                ModelTier // Optional: override model tier for this request
+	EnablePromptCache    *bool     // Optional: enable prompt caching (nil uses global default)
+	OutputSchema         *model.ResponseFormat
+	OutputSchemaMode     OutputSchemaMode
+	Traits               []string
+	Tags                 map[string]string
+	Channels             []string
+	Metadata             map[string]any
+	TargetSubagent       string
+	ToolWhitelist        []string
+	ForceSkills          []string
 }
 
 // Response aggregates the final agent result together with metadata emitted

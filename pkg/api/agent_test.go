@@ -18,8 +18,8 @@ import (
 	"github.com/godeps/agentkit/pkg/message"
 	"github.com/godeps/agentkit/pkg/model"
 	"github.com/godeps/agentkit/pkg/pipeline"
-	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/checkpoint"
+	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
 	"github.com/godeps/agentkit/pkg/security"
 	"github.com/godeps/agentkit/pkg/tool"
@@ -1033,8 +1033,8 @@ func TestResumePipelineRunContinuesRemainingStepsOnly(t *testing.T) {
 	}
 
 	resumed, err := rt.Run(context.Background(), Request{
-		SessionID:             "pipeline-session",
-		ResumeFromCheckpoint:  firstResp.Result.CheckpointID,
+		SessionID:            "pipeline-session",
+		ResumeFromCheckpoint: firstResp.Result.CheckpointID,
 	})
 	if err != nil {
 		t.Fatalf("resume pipeline: %v", err)

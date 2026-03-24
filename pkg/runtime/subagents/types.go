@@ -83,13 +83,13 @@ type WaitResult struct {
 }
 
 type RunRequest struct {
-	InstanceID     string
-	Target         string
-	Instruction    string
-	Activation     skills.ActivationContext
-	ToolWhitelist  []string
-	Metadata       map[string]any
-	ParentContext  Context
+	InstanceID    string
+	Target        string
+	Instruction   string
+	Activation    skills.ActivationContext
+	ToolWhitelist []string
+	Metadata      map[string]any
+	ParentContext Context
 }
 
 type Runner interface {

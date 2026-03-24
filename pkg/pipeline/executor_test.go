@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/godeps/agentkit/pkg/artifact"
-	"github.com/godeps/agentkit/pkg/tool"
 	"github.com/godeps/agentkit/pkg/runtime/cache"
+	"github.com/godeps/agentkit/pkg/tool"
 )
 
 func TestExecutorSequentialStepExecution(t *testing.T) {
@@ -81,7 +81,7 @@ func TestExecutorFanOutOverArtifactSets(t *testing.T) {
 	result, err := exec.Execute(context.Background(), Step{
 		FanOut: &FanOut{
 			Collection: "frames",
-			Step: Step{Name: "caption", Tool: "captioner"},
+			Step:       Step{Name: "caption", Tool: "captioner"},
 		},
 	}, Input{
 		Collections: map[string][]artifact.ArtifactRef{

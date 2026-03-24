@@ -5,17 +5,17 @@ import (
 	"testing"
 
 	"github.com/godeps/agentkit/pkg/artifact"
+	"github.com/godeps/agentkit/pkg/pipeline"
 	runtimecache "github.com/godeps/agentkit/pkg/runtime/cache"
 	"github.com/godeps/agentkit/pkg/runtime/checkpoint"
-	"github.com/godeps/agentkit/pkg/pipeline"
 	"github.com/godeps/agentkit/pkg/tool"
 )
 
 func TestTimelineIncludesArtifactsToolEventsAndCheckpoint(t *testing.T) {
 	root := newClaudeProject(t)
 	rt, err := New(context.Background(), Options{
-		ProjectRoot:     root,
-		Model:           &stubModel{},
+		ProjectRoot: root,
+		Model:       &stubModel{},
 		CustomTools: []tool.Tool{&pipelineStepTool{outputs: map[string]*tool.ToolResult{
 			"generate": {Output: "generated", Artifacts: []artifact.ArtifactRef{artifact.NewGeneratedRef("art_out", artifact.ArtifactKindText)}},
 			"review":   {Output: "reviewed"},
@@ -75,8 +75,8 @@ func TestTimelineIncludesCacheHitAndCheckpointResume(t *testing.T) {
 	cacheStore := runtimecache.NewMemoryStore()
 	checkpointStore := checkpoint.NewMemoryStore()
 	rt, err := New(context.Background(), Options{
-		ProjectRoot:     root,
-		Model:           &stubModel{},
+		ProjectRoot: root,
+		Model:       &stubModel{},
 		CustomTools: []tool.Tool{&pipelineStepTool{outputs: map[string]*tool.ToolResult{
 			"generate": {Output: "generated"},
 			"review":   {Output: "reviewed"},

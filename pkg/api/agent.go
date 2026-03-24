@@ -23,8 +23,8 @@ import (
 	"github.com/godeps/agentkit/pkg/model"
 	"github.com/godeps/agentkit/pkg/pipeline"
 	runtimecache "github.com/godeps/agentkit/pkg/runtime/cache"
-	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/checkpoint"
+	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
 	"github.com/godeps/agentkit/pkg/runtime/subagents"
 	"github.com/godeps/agentkit/pkg/runtime/tasks"
@@ -81,17 +81,17 @@ type Runtime struct {
 	historyPersister *diskHistoryPersister
 	sessionGate      *sessionGate
 
-	cmdExec   *commands.Executor
-	skReg     *skills.Registry
-	subMgr    *subagents.Manager
-	subStore  subagents.Store
-	subExec   *subagents.Executor
-	taskStore tasks.Store
+	cmdExec     *commands.Executor
+	skReg       *skills.Registry
+	subMgr      *subagents.Manager
+	subStore    subagents.Store
+	subExec     *subagents.Executor
+	taskStore   tasks.Store
 	checkpoints checkpoint.Store
 	cacheStore  runtimecache.Store
-	tokens    *tokenTracker
-	compactor *compactor
-	tracer    Tracer
+	tokens      *tokenTracker
+	compactor   *compactor
+	tracer      Tracer
 
 	mu sync.RWMutex
 

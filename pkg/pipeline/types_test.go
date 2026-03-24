@@ -71,8 +71,8 @@ func TestFanInDeclaresAggregationShape(t *testing.T) {
 func TestConditionalDeclaresBranchTargets(t *testing.T) {
 	conditional := Conditional{
 		Condition: "has_artifacts",
-		Then: Step{Name: "process"},
-		Else: &Step{Name: "skip"},
+		Then:      Step{Name: "process"},
+		Else:      &Step{Name: "skip"},
 	}
 
 	if conditional.Condition != "has_artifacts" {

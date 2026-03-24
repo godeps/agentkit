@@ -8,16 +8,16 @@ import (
 )
 
 const (
-	TimelineInputArtifact   = "input_artifact"
+	TimelineInputArtifact     = "input_artifact"
 	TimelineGeneratedArtifact = "generated_artifact"
-	TimelineToolCall        = "tool_call"
-	TimelineToolResult      = "tool_result"
-	TimelineCacheHit        = "cache_hit"
-	TimelineCacheMiss       = "cache_miss"
-	TimelineCheckpointCreate = "checkpoint_create"
-	TimelineCheckpointResume = "checkpoint_resume"
-	TimelineTokenSnapshot   = "token_snapshot"
-	TimelineLatencySnapshot = "latency_snapshot"
+	TimelineToolCall          = "tool_call"
+	TimelineToolResult        = "tool_result"
+	TimelineCacheHit          = "cache_hit"
+	TimelineCacheMiss         = "cache_miss"
+	TimelineCheckpointCreate  = "checkpoint_create"
+	TimelineCheckpointResume  = "checkpoint_resume"
+	TimelineTokenSnapshot     = "token_snapshot"
+	TimelineLatencySnapshot   = "latency_snapshot"
 )
 
 // TimelineEntry captures one significant runtime event for multimodal tracing.
