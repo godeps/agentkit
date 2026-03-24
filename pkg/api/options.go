@@ -16,10 +16,12 @@ import (
 	coreevents "github.com/godeps/agentkit/pkg/core/events"
 	corehooks "github.com/godeps/agentkit/pkg/core/hooks"
 	coremw "github.com/godeps/agentkit/pkg/core/middleware"
+	"github.com/godeps/agentkit/pkg/artifact"
 	"github.com/godeps/agentkit/pkg/middleware"
 	"github.com/godeps/agentkit/pkg/model"
 	"github.com/godeps/agentkit/pkg/pipeline"
 	"github.com/godeps/agentkit/pkg/runtime/commands"
+	"github.com/godeps/agentkit/pkg/runtime/checkpoint"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
 	"github.com/godeps/agentkit/pkg/runtime/subagents"
 	"github.com/godeps/agentkit/pkg/runtime/tasks"
@@ -276,6 +278,9 @@ type Options struct {
 	// ApprovalWait blocks tool execution until a pending approval is resolved.
 	ApprovalWait bool
 
+	// CheckpointStore persists resumable state for pipeline-backed runs.
+	CheckpointStore checkpoint.Store
+
 	// AutoCompact enables automatic context compaction for long sessions.
 	AutoCompact CompactConfig
 
@@ -302,6 +307,7 @@ type Request struct {
 	Pipeline          *pipeline.Step
 	Mode              ModeContext
 	SessionID         string
+	ResumeFromCheckpoint string
 	RequestID         string    `json:"request_id,omitempty"` // Auto-generated UUID or user-provided
 	Model             ModelTier // Optional: override model tier for this request
 	EnablePromptCache *bool     // Optional: enable prompt caching (nil uses global default)
@@ -335,10 +341,14 @@ type Response struct {
 
 // Result represents the agent execution result.
 type Result struct {
-	Output     string
-	StopReason string
-	Usage      model.Usage
-	ToolCalls  []model.ToolCall
+	Output       string
+	StopReason   string
+	Usage        model.Usage
+	ToolCalls    []model.ToolCall
+	Artifacts    []artifact.ArtifactRef
+	Structured   any
+	CheckpointID string
+	Interrupted  bool
 }
 
 // SkillExecution records individual skill invocations.

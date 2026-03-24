@@ -21,7 +21,9 @@ import (
 	"github.com/godeps/agentkit/pkg/message"
 	"github.com/godeps/agentkit/pkg/middleware"
 	"github.com/godeps/agentkit/pkg/model"
+	"github.com/godeps/agentkit/pkg/pipeline"
 	"github.com/godeps/agentkit/pkg/runtime/commands"
+	"github.com/godeps/agentkit/pkg/runtime/checkpoint"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
 	"github.com/godeps/agentkit/pkg/runtime/subagents"
 	"github.com/godeps/agentkit/pkg/runtime/tasks"
@@ -84,6 +86,7 @@ type Runtime struct {
 	subStore  subagents.Store
 	subExec   *subagents.Executor
 	taskStore tasks.Store
+	checkpoints checkpoint.Store
 	tokens    *tokenTracker
 	compactor *compactor
 	tracer    Tracer
@@ -227,10 +230,14 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		subMgr:           subMgr,
 		subStore:         subagents.NewMemoryStore(),
 		taskStore:        opts.TaskStore,
+		checkpoints:      opts.CheckpointStore,
 		tokens:           newTokenTracker(opts.TokenTracking, opts.TokenCallback),
 		compactor:        compactor,
 		tracer:           tracer,
 		ownsTaskStore:    ownsTaskStore,
+	}
+	if rt.checkpoints == nil {
+		rt.checkpoints = checkpoint.NewMemoryStore()
 	}
 	if rt.subMgr != nil {
 		rt.subExec = subagents.NewExecutor(rt.subMgr, rt.subStore, runtimeSubagentRunner{rt: rt})
@@ -278,6 +285,10 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	defer rt.sessionGate.Release(sessionID)
 
+	if req.Pipeline != nil || strings.TrimSpace(req.ResumeFromCheckpoint) != "" {
+		return rt.runPipeline(ctx, req)
+	}
+
 	prep, err := rt.prepare(ctx, req)
 	if err != nil {
 		return nil, err
@@ -288,6 +299,253 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (*Response, error) {
 		return nil, err
 	}
 	return rt.buildResponse(prep, result), nil
+}
+
+func (rt *Runtime) runPipeline(ctx context.Context, req Request) (*Response, error) {
+	normalized := req.normalized(rt.mode, defaultSessionID(rt.mode.EntryPoint))
+	if normalized.SessionID == "" {
+		normalized.SessionID = defaultSessionID(rt.mode.EntryPoint)
+	}
+	if normalized.RequestID == "" {
+		normalized.RequestID = uuid.New().String()
+	}
+
+	if strings.TrimSpace(normalized.ResumeFromCheckpoint) != "" {
+		return rt.resumePipeline(ctx, normalized)
+	}
+	if normalized.Pipeline == nil {
+		return nil, errors.New("api: pipeline is required")
+	}
+
+	result, checkpointID, interrupted, err := rt.executePipelineTree(ctx, *normalized.Pipeline, pipeline.Input{}, normalized.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	return rt.pipelineResponse(normalized, result, checkpointID, interrupted), nil
+}
+
+func (rt *Runtime) resumePipeline(ctx context.Context, req Request) (*Response, error) {
+	if rt.checkpoints == nil {
+		return nil, errors.New("api: checkpoint store not configured")
+	}
+	entry, err := rt.checkpoints.Load(ctx, req.ResumeFromCheckpoint)
+	if err != nil {
+		return nil, err
+	}
+	if entry.SessionID != "" && req.SessionID != "" && entry.SessionID != req.SessionID {
+		return nil, fmt.Errorf("api: checkpoint %s does not belong to session %s", req.ResumeFromCheckpoint, req.SessionID)
+	}
+
+	result := entry.Result
+	checkpointID := ""
+	interrupted := false
+	if entry.Remaining != nil {
+		next, nextCheckpointID, nextInterrupted, err := rt.executePipelineTree(ctx, *entry.Remaining, entry.Input, entry.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		result = mergePipelineResult(result, next)
+		checkpointID = nextCheckpointID
+		interrupted = nextInterrupted
+	}
+	if !interrupted {
+		_ = rt.checkpoints.Delete(ctx, req.ResumeFromCheckpoint)
+	}
+	return rt.pipelineResponse(req, result, checkpointID, interrupted), nil
+}
+
+func (rt *Runtime) pipelineResponse(req Request, result pipeline.Result, checkpointID string, interrupted bool) *Response {
+	stopReason := "completed"
+	if interrupted {
+		stopReason = "interrupted"
+	}
+	return &Response{
+		Mode:      req.Mode,
+		RequestID: req.RequestID,
+		Result: &Result{
+			Output:       result.Output,
+			StopReason:   stopReason,
+			Artifacts:    append([]artifact.ArtifactRef(nil), result.Artifacts...),
+			Structured:   result.Structured,
+			CheckpointID: checkpointID,
+			Interrupted:  interrupted,
+		},
+		ProjectConfig:   rt.Settings(),
+		Settings:        rt.Settings(),
+		SandboxSnapshot: rt.sandboxReport(),
+		Tags:            maps.Clone(req.Tags),
+	}
+}
+
+func (rt *Runtime) executePipelineTree(ctx context.Context, step pipeline.Step, input pipeline.Input, sessionID string) (pipeline.Result, string, bool, error) {
+	if step.Batch != nil {
+		current := clonePipelineInput(input)
+		var final pipeline.Result
+		for i, child := range step.Batch.Steps {
+			if child.Checkpoint != nil {
+				checkpointResult, err := rt.newPipelineExecutor(sessionID).Execute(ctx, child.Checkpoint.Step, current)
+				if err != nil {
+					return pipeline.Result{}, "", false, err
+				}
+				final = mergePipelineResult(final, checkpointResult)
+				current = pipelineInputFromResult(current, checkpointResult)
+				var remaining *pipeline.Step
+				if i+1 < len(step.Batch.Steps) {
+					remaining = &pipeline.Step{Batch: &pipeline.Batch{Steps: append([]pipeline.Step(nil), step.Batch.Steps[i+1:]...)}}
+				}
+				checkpointID, err := rt.checkpoints.Save(ctx, checkpoint.Entry{
+					SessionID: sessionID,
+					Remaining: remaining,
+					Input:     current,
+					Result:    final,
+				})
+				if err != nil {
+					return pipeline.Result{}, "", false, err
+				}
+				return final, checkpointID, true, nil
+			}
+			result, nestedCheckpointID, interrupted, err := rt.executePipelineTree(ctx, child, current, sessionID)
+			if err != nil {
+				return pipeline.Result{}, "", false, err
+			}
+			final = mergePipelineResult(final, result)
+			current = pipelineInputFromResult(current, result)
+			if interrupted {
+				return final, nestedCheckpointID, true, nil
+			}
+		}
+		return final, "", false, nil
+	}
+	if step.Checkpoint != nil {
+		result, err := rt.newPipelineExecutor(sessionID).Execute(ctx, step.Checkpoint.Step, input)
+		if err != nil {
+			return pipeline.Result{}, "", false, err
+		}
+		checkpointID, err := rt.checkpoints.Save(ctx, checkpoint.Entry{
+			SessionID: sessionID,
+			Input:     pipelineInputFromResult(input, result),
+			Result:    result,
+		})
+		if err != nil {
+			return pipeline.Result{}, "", false, err
+		}
+		return result, checkpointID, true, nil
+	}
+	result, err := rt.newPipelineExecutor(sessionID).Execute(ctx, step, input)
+	if err != nil {
+		return pipeline.Result{}, "", false, err
+	}
+	return result, "", false, nil
+}
+
+func (rt *Runtime) newPipelineExecutor(sessionID string) pipeline.Executor {
+	return pipeline.Executor{
+		RunTool: func(ctx context.Context, step pipeline.Step, refs []artifact.ArtifactRef) (*tool.ToolResult, error) {
+			params := cloneArguments(step.With)
+			if params == nil {
+				params = map[string]any{}
+			}
+			params["step"] = step.Name
+			if len(refs) > 0 {
+				params["artifacts"] = refs
+			}
+			res, err := rt.executor.Execute(ctx, tool.Call{
+				Name:      step.Tool,
+				Params:    params,
+				Path:      rt.sbRoot,
+				Host:      "localhost",
+				SessionID: sessionID,
+			})
+			if err != nil {
+				return nil, err
+			}
+			if res == nil {
+				return nil, nil
+			}
+			return res.Result, nil
+		},
+		RunSkill: func(ctx context.Context, step pipeline.Step, refs []artifact.ArtifactRef) (*tool.ToolResult, error) {
+			if rt.skReg == nil {
+				return nil, fmt.Errorf("pipeline: skills registry not configured")
+			}
+			meta := cloneArguments(step.With)
+			if meta == nil {
+				meta = map[string]any{}
+			}
+			if len(refs) > 0 {
+				meta["artifacts"] = refs
+			}
+			res, err := rt.skReg.Execute(ctx, step.Skill, skills.ActivationContext{
+				Prompt:   step.Name,
+				Metadata: meta,
+			})
+			if err != nil {
+				return nil, err
+			}
+			out := &tool.ToolResult{}
+			switch val := res.Output.(type) {
+			case string:
+				out.Output = val
+			default:
+				out.Structured = val
+			}
+			if arts, ok := res.Metadata["artifacts"].([]artifact.ArtifactRef); ok {
+				out.Artifacts = append([]artifact.ArtifactRef(nil), arts...)
+			}
+			return out, nil
+		},
+	}
+}
+
+func pipelineInputFromResult(previous pipeline.Input, result pipeline.Result) pipeline.Input {
+	next := clonePipelineInput(previous)
+	next.Items = append([]pipeline.Result(nil), result.Items...)
+	if len(result.Artifacts) > 0 {
+		next.Artifacts = append([]artifact.ArtifactRef(nil), result.Artifacts...)
+	}
+	return next
+}
+
+func clonePipelineInput(in pipeline.Input) pipeline.Input {
+	return pipeline.Input{
+		Artifacts:   append([]artifact.ArtifactRef(nil), in.Artifacts...),
+		Collections: clonePipelineCollections(in.Collections),
+		Items:       append([]pipeline.Result(nil), in.Items...),
+	}
+}
+
+func clonePipelineCollections(in map[string][]artifact.ArtifactRef) map[string][]artifact.ArtifactRef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string][]artifact.ArtifactRef, len(in))
+	for key, refs := range in {
+		out[key] = append([]artifact.ArtifactRef(nil), refs...)
+	}
+	return out
+}
+
+func mergePipelineResult(base, next pipeline.Result) pipeline.Result {
+	if next.Output != "" {
+		base.Output = next.Output
+	}
+	if next.Summary != "" {
+		base.Summary = next.Summary
+	}
+	if next.Structured != nil {
+		base.Structured = next.Structured
+	}
+	if next.Preview != nil {
+		base.Preview = next.Preview
+	}
+	if len(next.Artifacts) > 0 {
+		base.Artifacts = append([]artifact.ArtifactRef(nil), next.Artifacts...)
+	}
+	if len(next.Items) > 0 {
+		base.Items = append([]pipeline.Result(nil), next.Items...)
+	}
+	base.Lineage.Edges = append(base.Lineage.Edges, next.Lineage.Edges...)
+	return base
 }
 
 // RunStream executes the pipeline asynchronously and returns events over a channel.
