@@ -333,6 +333,7 @@ type Response struct {
 	Subagent       *subagents.Result
 	HookEvents     []coreevents.Event
 	Timeline       []TimelineEntry
+	StreamEvents   []StreamEvent
 	// Deprecated: Use Settings instead. Kept for backward compatibility.
 	ProjectConfig   *config.Settings
 	Settings        *config.Settings

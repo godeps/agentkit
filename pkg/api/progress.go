@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/godeps/agentkit/pkg/agent"
 	"github.com/godeps/agentkit/pkg/middleware"
@@ -153,6 +154,9 @@ func (e progressEmitter) emit(ctx context.Context, evt StreamEvent) {
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if evt.Timestamp.IsZero() {
+		evt.Timestamp = time.Now().UTC()
 	}
 	// 阻塞发送保证事件不会静默丢失；在 context 取消时优雅返回。
 	select {

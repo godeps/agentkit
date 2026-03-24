@@ -16,6 +16,8 @@ const (
 
 	TimelineKindModelRequest  = "model_request"
 	TimelineKindModelResponse = "model_response"
+	TimelineKindAgent         = "agent"
+	TimelineKindIteration     = "iteration"
 	TimelineKindToolCall      = "tool_call"
 	TimelineKindToolResult    = "tool_result"
 	TimelineKindMiddleware    = "middleware"
@@ -36,6 +38,11 @@ func BuildTimeline(resp *Response) []TimelineEntry {
 		return nil
 	}
 	out := make([]TimelineEntry, 0, len(resp.HookEvents)+2)
+	for _, evt := range resp.StreamEvents {
+		if kind := timelineKindForStreamEvent(evt.Type); kind != "" {
+			out = append(out, TimelineEntry{Kind: kind, Timestamp: evt.Timestamp, Source: evt.Type})
+		}
+	}
 	for _, evt := range resp.HookEvents {
 		if kind := timelineKindForEvent(evt.Type); kind != "" {
 			out = append(out, TimelineEntry{Kind: kind, Timestamp: evt.Timestamp, Source: string(evt.Type)})
@@ -48,6 +55,21 @@ func BuildTimeline(resp *Response) []TimelineEntry {
 		return out[i].Timestamp.Before(out[j].Timestamp)
 	})
 	return out
+}
+
+func timelineKindForStreamEvent(eventType string) string {
+	switch eventType {
+	case EventAgentStart, EventAgentStop:
+		return TimelineKindAgent
+	case EventIterationStart, EventIterationStop:
+		return TimelineKindIteration
+	case EventToolExecutionStart:
+		return TimelineKindToolCall
+	case EventToolExecutionResult:
+		return TimelineKindToolResult
+	default:
+		return ""
+	}
 }
 
 func timelineKindForEvent(eventType coreevents.EventType) string {

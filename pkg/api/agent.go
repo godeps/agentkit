@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/url"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -236,7 +237,11 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		ownsTaskStore:    ownsTaskStore,
 	}
 	if rt.checkpoints == nil {
-		rt.checkpoints = checkpoint.NewMemoryStore()
+		if dir := checkpoint.DiskStoreDir(opts.ProjectRoot, opts.ConfigRoot); strings.TrimSpace(dir) != "" {
+			rt.checkpoints = checkpoint.NewDiskStore(dir)
+		} else {
+			rt.checkpoints = checkpoint.NewMemoryStore()
+		}
 	}
 	if rt.subMgr != nil {
 		rt.subExec = subagents.NewExecutor(rt.subMgr, rt.subStore, runtimeSubagentRunner{rt: rt})
@@ -312,14 +317,14 @@ func (rt *Runtime) Resume(ctx context.Context, checkpointID string) (*Response, 
 	var resp *Response
 	switch rec.Kind {
 	case checkpoint.KindPlan:
-		state, ok := rec.State.(planCheckpointState)
-		if !ok {
+		state, err := decodePlanCheckpointState(rec.State)
+		if err != nil {
 			return nil, fmt.Errorf("api: invalid plan checkpoint state")
 		}
 		resp, err = rt.resumePlan(ctx, checkpointID, state)
 	case checkpoint.KindApproval:
-		state, ok := rec.State.(approvalCheckpointState)
-		if !ok {
+		state, err := decodeApprovalCheckpointState(rec.State)
+		if err != nil {
 			return nil, fmt.Errorf("api: invalid approval checkpoint state")
 		}
 		resp, err = rt.resumeApproval(ctx, checkpointID, state)
@@ -533,6 +538,7 @@ type runResult struct {
 	reason       string
 	interrupted  bool
 	checkpointID string
+	streamEvents []StreamEvent
 }
 
 type planCheckpointState struct {
@@ -542,16 +548,18 @@ type planCheckpointState struct {
 }
 
 type approvalCheckpointState struct {
-	Request   Request
-	History   []message.Message
-	Pending   agent.ToolCall
-	RequestID string
+	Request    Request
+	History    []message.Message
+	Pending    agent.ToolCall
+	RequestID  string
+	ApprovalID string
 }
 
 type interruptError struct {
-	kind    checkpoint.Kind
-	tool    *agent.ToolCall
-	history []message.Message
+	kind       checkpoint.Kind
+	tool       *agent.ToolCall
+	history    []message.Message
+	approvalID string
 }
 
 func (e *interruptError) Error() string {
@@ -562,6 +570,16 @@ func (e *interruptError) Error() string {
 }
 
 func (e *interruptError) InterruptMarker() bool { return true }
+
+type approvalRequiredError struct {
+	toolName   string
+	approvalID string
+}
+
+func (e *approvalRequiredError) Error() string {
+	return fmt.Sprintf("%s: %s", ErrToolUseRequiresApproval.Error(), e.toolName)
+}
+func (e *approvalRequiredError) Unwrap() error { return ErrToolUseRequiresApproval }
 
 func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error) {
 	if ctx == nil {
@@ -713,6 +731,14 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		iterationPolicy:     rt.opts.IterationPolicy,
 	}
 
+	var progressChan chan StreamEvent
+	if !hasProgressMiddleware(extras) {
+		progressChan = make(chan StreamEvent, 1024)
+		progressMW := newProgressMiddleware(progressChan)
+		prep.ctx = withStreamEmit(prep.ctx, progressMW.streamEmit())
+		extras = append([]middleware.Middleware{progressMW}, extras...)
+	}
+
 	chainItems := make([]middleware.Middleware, 0, len(rt.opts.Middleware)+len(extras))
 	if len(rt.opts.Middleware) > 0 {
 		chainItems = append(chainItems, rt.opts.Middleware...)
@@ -748,16 +774,24 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		agentCtx.Values["skills.registry"] = rt.skReg
 	}
 	out, err := ag.Run(prep.ctx, agentCtx)
+	var streamEvents []StreamEvent
+	if progressChan != nil {
+		close(progressChan)
+		streamEvents = drainStreamEvents(progressChan)
+	}
 	if err != nil {
 		var intr *interruptError
 		if errors.As(err, &intr) {
-			return rt.saveApprovalInterrupt(prep, intr)
+			res, saveErr := rt.saveApprovalInterrupt(prep, intr)
+			res.streamEvents = streamEvents
+			return res, saveErr
 		}
 		return runResult{}, err
 	}
 	result := runResult{output: out, usage: modelAdapter.usage, reason: modelAdapter.stopReason}
 	result = rt.applyOutputSchema(prep.ctx, selectedModel, prep.history, modelAdapter.outputSchema, modelAdapter.outputMode, result)
 	result.envelope = resultEnvelopeFromRunResult(result)
+	result.streamEvents = streamEvents
 	if rt.tokens != nil && rt.tokens.IsEnabled() {
 		stats := tokenStatsFromUsage(result.usage, "", prep.normalized.SessionID, prep.normalized.RequestID)
 		rt.tokens.Record(stats)
@@ -805,6 +839,7 @@ func (rt *Runtime) buildResponse(prep preparedRun, result runResult) *Response {
 		SkillResults:    prep.skillResults,
 		Subagent:        prep.subagentResult,
 		HookEvents:      events,
+		StreamEvents:    append([]StreamEvent(nil), result.streamEvents...),
 		ProjectConfig:   rt.Settings(),
 		Settings:        rt.Settings(),
 		SandboxSnapshot: rt.sandboxReport(),
@@ -826,6 +861,26 @@ func (rt *Runtime) newToolExecutor(prep preparedRun) (*runtimeToolExecutor, *run
 		sessionID:          prep.normalized.SessionID,
 		permissionResolver: buildPermissionResolver(hookAdapter, rt.opts.PermissionRequestHandler, rt.opts.ApprovalQueue, rt.opts.ApprovalApprover, rt.opts.ApprovalWhitelistTTL, rt.opts.ApprovalWait),
 	}, hookAdapter, nil
+}
+
+func drainStreamEvents(ch <-chan StreamEvent) []StreamEvent {
+	if ch == nil {
+		return nil
+	}
+	var out []StreamEvent
+	for evt := range ch {
+		out = append(out, evt)
+	}
+	return out
+}
+
+func hasProgressMiddleware(items []middleware.Middleware) bool {
+	for _, item := range items {
+		if _, ok := item.(*progressMiddleware); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (rt *Runtime) applyOutputPolicy(prep preparedRun, result *Result) *Result {
@@ -928,94 +983,38 @@ func resultEnvelopeFromRunResult(res runResult) *orchestration.ResultEnvelope {
 }
 
 func (rt *Runtime) runPlan(prep preparedRun) (runResult, error) {
-	if prep.normalized.Plan != nil && prep.normalized.Plan.Kind == orchestration.KindSequence {
-		return rt.runPlanSequence(prep, *prep.normalized.Plan, nil)
-	}
-	var mu sync.Mutex
-	var usage model.Usage
-	var reason string
-	exec := orchestration.NewExecutor(func(ctx context.Context, node orchestration.Node, input orchestration.Input) (*orchestration.ResultEnvelope, error) {
-		child := prep.cloneForPlanNode(node)
-		child.ctx = ctx
-		if len(input.Metadata) > 0 {
-			child.normalized.Metadata = maps.Clone(input.Metadata)
-		}
-		res, err := rt.runAgentWithMiddleware(child)
-		if err != nil {
-			return nil, err
-		}
-		mu.Lock()
-		usage = mergeUsage(usage, res.usage)
-		if strings.TrimSpace(res.reason) != "" {
-			reason = res.reason
-		}
-		mu.Unlock()
-		return resultEnvelopeFromRunResult(res), nil
-	})
-
 	var plan orchestration.Node
 	if prep.normalized.Plan != nil {
 		plan = *prep.normalized.Plan
 	}
-	env, err := exec.Execute(prep.ctx, plan, orchestration.Input{Metadata: maps.Clone(prep.normalized.Metadata)})
+	out, err := rt.runPlanNode(prep, plan)
 	if err != nil {
 		return runResult{}, err
 	}
-	return runResult{
-		envelope: env,
-		reason:   reason,
-		usage:    usage,
-	}, nil
-}
-
-func (rt *Runtime) runPlanSequence(prep preparedRun, plan orchestration.Node, accumulated *orchestration.ResultEnvelope) (runResult, error) {
-	env := cloneOrchestrationEnvelope(accumulated)
-	if env == nil {
-		env = &orchestration.ResultEnvelope{}
-	}
-	var usage model.Usage
-	var reason string
-	var parts []string
-	if text := strings.TrimSpace(env.Text); text != "" {
-		parts = append(parts, text)
-	}
-	for idx, node := range plan.Nodes {
-		if isPlanPauseNode(node) {
-			remaining := orchestration.Sequence(plan.Nodes[idx+1:]...)
-			checkpointID, err := rt.savePlanCheckpoint(prep.ctx, planCheckpointState{
-				Request:     prep.normalized,
-				Remaining:   remaining,
-				Accumulated: env,
-			}, prep.normalized.SessionID)
-			if err != nil {
-				return runResult{}, err
-			}
-			env.Text = strings.Join(parts, "\n")
-			return runResult{
-				envelope:     env,
-				usage:        usage,
-				reason:       "interrupt",
-				interrupted:  true,
-				checkpointID: checkpointID,
-			}, nil
-		}
-		child := prep.cloneForPlanNode(node)
-		res, err := rt.runAgentWithMiddleware(child)
+	if out.interrupted {
+		checkpointID, err := rt.savePlanCheckpoint(prep.ctx, planCheckpointState{
+			Request:     prep.normalized,
+			Remaining:   nodeOrZero(out.continuation),
+			Accumulated: out.envelope,
+		}, prep.normalized.SessionID)
 		if err != nil {
 			return runResult{}, err
 		}
-		usage = mergeUsage(usage, res.usage)
-		if strings.TrimSpace(res.reason) != "" {
-			reason = res.reason
-		}
-		nodeEnv := resultEnvelopeFromRunResult(res)
-		if text := strings.TrimSpace(nodeEnv.Text); text != "" {
-			parts = append(parts, text)
-		}
-		env = mergePlanEnvelope(env, nodeEnv)
-		env.Text = strings.Join(parts, "\n")
+		return runResult{
+			envelope:     out.envelope,
+			usage:        out.usage,
+			reason:       "interrupt",
+			interrupted:  true,
+			checkpointID: checkpointID,
+			streamEvents: out.streamEvents,
+		}, nil
 	}
-	return runResult{envelope: env, usage: usage, reason: reason}, nil
+	return runResult{
+		envelope:     out.envelope,
+		usage:        out.usage,
+		reason:       out.reason,
+		streamEvents: out.streamEvents,
+	}, nil
 }
 
 func (prep preparedRun) cloneForPlanNode(node orchestration.Node) preparedRun {
@@ -1100,13 +1099,266 @@ func mergeUsage(dst, src model.Usage) model.Usage {
 	return dst
 }
 
+type portablePlanCheckpointState struct {
+	Request     Request                       `json:"request"`
+	Remaining   orchestration.Node            `json:"remaining"`
+	Accumulated *orchestration.ResultEnvelope `json:"accumulated,omitempty"`
+}
+
+type portableApprovalCheckpointState struct {
+	Request    Request           `json:"request"`
+	History    []message.Message `json:"history,omitempty"`
+	Pending    agent.ToolCall    `json:"pending"`
+	RequestID  string            `json:"request_id,omitempty"`
+	ApprovalID string            `json:"approval_id,omitempty"`
+}
+
+type planNodeExecution struct {
+	envelope     *orchestration.ResultEnvelope
+	usage        model.Usage
+	reason       string
+	interrupted  bool
+	continuation *orchestration.Node
+	streamEvents []StreamEvent
+}
+
+func encodePlanCheckpointState(state planCheckpointState) any {
+	return portablePlanCheckpointState{
+		Request:     state.Request,
+		Remaining:   state.Remaining,
+		Accumulated: cloneOrchestrationEnvelope(state.Accumulated),
+	}
+}
+
+func decodePlanCheckpointState(raw any) (planCheckpointState, error) {
+	var portable portablePlanCheckpointState
+	if err := remarshal(raw, &portable); err != nil {
+		return planCheckpointState{}, err
+	}
+	return planCheckpointState{
+		Request:     portable.Request,
+		Remaining:   portable.Remaining,
+		Accumulated: portable.Accumulated,
+	}, nil
+}
+
+func encodeApprovalCheckpointState(state approvalCheckpointState) any {
+	return portableApprovalCheckpointState{
+		Request:    state.Request,
+		History:    append([]message.Message(nil), state.History...),
+		Pending:    state.Pending,
+		RequestID:  state.RequestID,
+		ApprovalID: state.ApprovalID,
+	}
+}
+
+func decodeApprovalCheckpointState(raw any) (approvalCheckpointState, error) {
+	var portable portableApprovalCheckpointState
+	if err := remarshal(raw, &portable); err != nil {
+		return approvalCheckpointState{}, err
+	}
+	return approvalCheckpointState{
+		Request:    portable.Request,
+		History:    portable.History,
+		Pending:    portable.Pending,
+		RequestID:  portable.RequestID,
+		ApprovalID: portable.ApprovalID,
+	}, nil
+}
+
+func remarshal(src any, dst any) error {
+	data, err := json.Marshal(src)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, dst)
+}
+
+func (rt *Runtime) runPlanNode(prep preparedRun, node orchestration.Node) (planNodeExecution, error) {
+	switch node.Kind {
+	case orchestration.KindSequence:
+		return rt.runPlanSequenceNode(prep, node)
+	case orchestration.KindParallel:
+		return rt.runPlanParallelNode(prep, node)
+	case orchestration.KindConditional:
+		return rt.runPlanConditionalNode(prep, node)
+	case "", orchestration.KindTask:
+		return rt.runPlanTaskNode(prep, node)
+	default:
+		return planNodeExecution{}, fmt.Errorf("api: unsupported orchestration node kind %q", node.Kind)
+	}
+}
+
+func (rt *Runtime) runPlanSequenceNode(prep preparedRun, node orchestration.Node) (planNodeExecution, error) {
+	env := &orchestration.ResultEnvelope{}
+	var usage model.Usage
+	var reason string
+	var events []StreamEvent
+	var parts []string
+	for idx, childNode := range node.Nodes {
+		child, err := rt.runPlanNode(prep, childNode)
+		if err != nil {
+			return planNodeExecution{}, err
+		}
+		usage = mergeUsage(usage, child.usage)
+		events = append(events, child.streamEvents...)
+		if child.interrupted {
+			contNodes := make([]orchestration.Node, 0, len(node.Nodes)-idx)
+			if child.continuation != nil && !isZeroNode(*child.continuation) {
+				contNodes = append(contNodes, *child.continuation)
+			}
+			contNodes = append(contNodes, node.Nodes[idx+1:]...)
+			env = mergePlanEnvelope(env, child.envelope)
+			env.Text = joinEnvelopeText(parts, child.envelope)
+			var continuation *orchestration.Node
+			if len(contNodes) > 0 {
+				seq := orchestration.Sequence(contNodes...)
+				continuation = &seq
+			}
+			return planNodeExecution{envelope: env, usage: usage, interrupted: true, continuation: continuation, streamEvents: events}, nil
+		}
+		if strings.TrimSpace(child.reason) != "" {
+			reason = child.reason
+		}
+		if text := strings.TrimSpace(textFromEnvelope(child.envelope)); text != "" {
+			parts = append(parts, text)
+		}
+		env = mergePlanEnvelope(env, child.envelope)
+		env.Text = strings.Join(parts, "\n")
+	}
+	return planNodeExecution{envelope: env, usage: usage, reason: reason, streamEvents: events}, nil
+}
+
+func (rt *Runtime) runPlanParallelNode(prep preparedRun, node orchestration.Node) (planNodeExecution, error) {
+	env := &orchestration.ResultEnvelope{Branches: map[string]orchestration.ResultEnvelope{}}
+	var usage model.Usage
+	var reason string
+	var events []StreamEvent
+	var parts []string
+	for idx, branch := range node.Branches {
+		child, err := rt.runPlanNode(prep, branch.Node)
+		if err != nil {
+			return planNodeExecution{}, err
+		}
+		usage = mergeUsage(usage, child.usage)
+		events = append(events, child.streamEvents...)
+		if child.envelope != nil {
+			env.Branches[branch.Name] = *cloneOrchestrationEnvelope(child.envelope)
+			if text := strings.TrimSpace(textFromEnvelope(child.envelope)); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		if child.interrupted {
+			remaining := make([]orchestration.Branch, 0, len(node.Branches)-idx)
+			if child.continuation != nil && !isZeroNode(*child.continuation) {
+				remaining = append(remaining, orchestration.Branch{Name: branch.Name, Node: *child.continuation})
+			}
+			remaining = append(remaining, node.Branches[idx+1:]...)
+			env.Text = strings.Join(parts, "\n")
+			var continuation *orchestration.Node
+			if len(remaining) > 0 {
+				par := orchestration.Parallel(remaining...)
+				continuation = &par
+			}
+			return planNodeExecution{envelope: env, usage: usage, interrupted: true, continuation: continuation, streamEvents: events}, nil
+		}
+		if strings.TrimSpace(child.reason) != "" {
+			reason = child.reason
+		}
+	}
+	env.Text = strings.Join(parts, "\n")
+	return planNodeExecution{envelope: env, usage: usage, reason: reason, streamEvents: events}, nil
+}
+
+func (rt *Runtime) runPlanConditionalNode(prep preparedRun, node orchestration.Node) (planNodeExecution, error) {
+	for _, branch := range node.Branches {
+		if planConditionMatches(branch.When, prep.normalized.Metadata) {
+			return rt.runPlanNode(prep, branch.Node)
+		}
+	}
+	if node.Default != nil {
+		return rt.runPlanNode(prep, *node.Default)
+	}
+	return planNodeExecution{envelope: &orchestration.ResultEnvelope{}}, nil
+}
+
+func (rt *Runtime) runPlanTaskNode(prep preparedRun, node orchestration.Node) (planNodeExecution, error) {
+	if isPlanPauseNode(node) {
+		return planNodeExecution{envelope: &orchestration.ResultEnvelope{}, interrupted: true}, nil
+	}
+	child := prep.cloneForPlanNode(node)
+	res, err := rt.runAgentWithMiddleware(child)
+	if err != nil {
+		return planNodeExecution{}, err
+	}
+	return planNodeExecution{
+		envelope:     resultEnvelopeFromRunResult(res),
+		usage:        res.usage,
+		reason:       res.reason,
+		streamEvents: append([]StreamEvent(nil), res.streamEvents...),
+	}, nil
+}
+
+func textFromEnvelope(env *orchestration.ResultEnvelope) string {
+	if env == nil {
+		return ""
+	}
+	return strings.TrimSpace(env.Text)
+}
+
+func joinEnvelopeText(parts []string, env *orchestration.ResultEnvelope) string {
+	if text := textFromEnvelope(env); text != "" {
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func nodeOrZero(node *orchestration.Node) orchestration.Node {
+	if node == nil {
+		return orchestration.Node{}
+	}
+	return *node
+}
+
+func isZeroNode(node orchestration.Node) bool {
+	return node.Kind == "" && strings.TrimSpace(node.Name) == "" && len(node.Nodes) == 0 && len(node.Branches) == 0 && node.Default == nil
+}
+
+func planConditionMatches(expr string, input map[string]any) bool {
+	expr = strings.TrimSpace(expr)
+	if expr == "" {
+		return false
+	}
+	left, right, found := strings.Cut(expr, "==")
+	if !found {
+		return false
+	}
+	left = strings.TrimSpace(left)
+	if !strings.HasPrefix(left, "input.") {
+		return false
+	}
+	key := strings.TrimSpace(strings.TrimPrefix(left, "input."))
+	if key == "" {
+		return false
+	}
+	value, ok := input[key]
+	if !ok {
+		return false
+	}
+	expected := strings.TrimSpace(right)
+	if parsed, err := strconv.Unquote(expected); err == nil {
+		return fmt.Sprint(value) == parsed
+	}
+	return fmt.Sprint(value) == expected
+}
+
 func (rt *Runtime) savePlanCheckpoint(ctx context.Context, state planCheckpointState, sessionID string) (string, error) {
 	id := uuid.New().String()
 	err := rt.checkpoints.Save(ctx, checkpoint.Record{
 		ID:      id,
 		Session: sessionID,
 		Kind:    checkpoint.KindPlan,
-		State:   state,
+		State:   encodePlanCheckpointState(state),
 	})
 	return id, err
 }
@@ -1117,16 +1369,17 @@ func (rt *Runtime) saveApprovalInterrupt(prep preparedRun, intr *interruptError)
 	}
 	id := uuid.New().String()
 	state := approvalCheckpointState{
-		Request:   prep.normalized,
-		History:   append([]message.Message(nil), intr.history...),
-		Pending:   *intr.tool,
-		RequestID: prep.normalized.RequestID,
+		Request:    prep.normalized,
+		History:    append([]message.Message(nil), intr.history...),
+		Pending:    *intr.tool,
+		RequestID:  prep.normalized.RequestID,
+		ApprovalID: intr.approvalID,
 	}
 	if err := rt.checkpoints.Save(prep.ctx, checkpoint.Record{
 		ID:      id,
 		Session: prep.normalized.SessionID,
 		Kind:    checkpoint.KindApproval,
-		State:   state,
+		State:   encodeApprovalCheckpointState(state),
 	}); err != nil {
 		return runResult{}, err
 	}
@@ -1146,11 +1399,24 @@ func (rt *Runtime) resumePlan(ctx context.Context, checkpointID string, state pl
 		recorder:   defaultHookRecorder(),
 		mode:       state.Request.Mode,
 	}
-	res, err := rt.runPlanSequence(prep, state.Remaining, state.Accumulated)
-	if err != nil {
-		return nil, err
+	var res runResult
+	if isZeroNode(state.Remaining) {
+		res = runResult{envelope: cloneOrchestrationEnvelope(state.Accumulated), checkpointID: checkpointID}
+	} else {
+		out, err := rt.runPlanNode(prep, state.Remaining)
+		if err != nil {
+			return nil, err
+		}
+		env := mergePlanEnvelope(cloneOrchestrationEnvelope(state.Accumulated), out.envelope)
+		env.Text = strings.Trim(strings.Join([]string{strings.TrimSpace(textFromEnvelope(state.Accumulated)), strings.TrimSpace(textFromEnvelope(out.envelope))}, "\n"), "\n")
+		res = runResult{
+			envelope:     env,
+			usage:        out.usage,
+			reason:       out.reason,
+			checkpointID: checkpointID,
+			streamEvents: out.streamEvents,
+		}
 	}
-	res.checkpointID = checkpointID
 	resp := rt.buildResponse(prep, res)
 	resp.HookEvents = append(resp.HookEvents, coreevents.Event{Type: coreevents.EventType(TimelineEventResume), Timestamp: time.Now().UTC()})
 	resp.Timeline = BuildTimeline(resp)
@@ -1158,6 +1424,15 @@ func (rt *Runtime) resumePlan(ctx context.Context, checkpointID string, state pl
 }
 
 func (rt *Runtime) resumeApproval(ctx context.Context, checkpointID string, state approvalCheckpointState) (*Response, error) {
+	if rt.opts.ApprovalQueue != nil && strings.TrimSpace(state.ApprovalID) != "" {
+		resolved, err := rt.opts.ApprovalQueue.Wait(ctx, state.ApprovalID)
+		if err != nil {
+			return nil, err
+		}
+		if resolved.State != security.ApprovalApproved {
+			return nil, fmt.Errorf("api: approval %s not approved", state.ApprovalID)
+		}
+	}
 	history := rt.histories.Get(state.Request.SessionID)
 	history.Replace(state.History)
 	prep := preparedRun{
@@ -1171,6 +1446,12 @@ func (rt *Runtime) resumeApproval(ctx context.Context, checkpointID string, stat
 	toolExec, _, err := rt.newToolExecutor(prep)
 	if err != nil {
 		return nil, err
+	}
+	toolExec.permissionResolver = func(_ context.Context, call tool.Call, decision security.PermissionDecision) (security.PermissionDecision, error) {
+		if strings.TrimSpace(state.ApprovalID) == "" {
+			return decision, nil
+		}
+		return decisionWithAction(decision, security.PermissionAllow), nil
 	}
 	if _, err := toolExec.Execute(ctx, state.Pending, agent.NewContext()); err != nil {
 		return nil, err
@@ -1925,6 +2206,15 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 	}
 	if preErr != nil {
 		if errors.Is(preErr, ErrToolUseRequiresApproval) {
+			var approvalErr *approvalRequiredError
+			if errors.As(preErr, &approvalErr) {
+				return agent.ToolResult{Name: call.Name}, &interruptError{
+					kind:       checkpoint.KindApproval,
+					tool:       &call,
+					history:    t.history.All(),
+					approvalID: approvalErr.approvalID,
+				}
+			}
 			return agent.ToolResult{Name: call.Name}, &interruptError{
 				kind:    checkpoint.KindApproval,
 				tool:    &call,
@@ -1969,6 +2259,15 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 	}
 	result, err := exec.Execute(ctx, callSpec)
 	if err != nil && errors.Is(err, ErrToolUseRequiresApproval) {
+		var approvalErr *approvalRequiredError
+		if errors.As(err, &approvalErr) {
+			return agent.ToolResult{Name: call.Name}, &interruptError{
+				kind:       checkpoint.KindApproval,
+				tool:       &call,
+				history:    t.history.All(),
+				approvalID: approvalErr.approvalID,
+			}
+		}
 		return agent.ToolResult{Name: call.Name}, &interruptError{
 			kind:    checkpoint.KindApproval,
 			tool:    &call,
@@ -2119,7 +2418,7 @@ func buildPermissionResolver(hooks *runtimeHookAdapter, handler PermissionReques
 		}
 
 		if record != nil {
-			return decision, fmt.Errorf("%w: %s", ErrToolUseRequiresApproval, call.Name)
+			return decision, &approvalRequiredError{toolName: call.Name, approvalID: record.ID}
 		}
 		return decision, nil
 	}

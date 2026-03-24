@@ -584,6 +584,121 @@ func TestRuntimeResumeByCheckpointID(t *testing.T) {
 	}
 }
 
+func TestRuntimeResumeByCheckpointIDAfterRestart(t *testing.T) {
+	root := newClaudeProject(t)
+	firstModel := &stubModel{responses: []*model.Response{
+		{Message: model.Message{Role: "assistant", Content: "alpha"}},
+	}}
+	firstRT, err := New(context.Background(), Options{ProjectRoot: root, Model: firstModel})
+	if err != nil {
+		t.Fatalf("first runtime: %v", err)
+	}
+
+	plan := orchestration.Sequence(
+		orchestration.Node{Kind: orchestration.KindTask, Name: "alpha", Metadata: map[string]any{"prompt": "alpha"}},
+		orchestration.Node{Kind: orchestration.KindTask, Name: "pause", Metadata: map[string]any{"pause": "ask_user"}},
+		orchestration.Node{Kind: orchestration.KindTask, Name: "beta", Metadata: map[string]any{"prompt": "beta"}},
+	)
+
+	first, err := firstRT.Run(context.Background(), Request{Prompt: "ignored", SessionID: "sess-restart", Plan: &plan})
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	checkpointID := first.Result.CheckpointID
+	_ = firstRT.Close()
+
+	secondModel := &stubModel{responses: []*model.Response{
+		{Message: model.Message{Role: "assistant", Content: "beta"}},
+	}}
+	secondRT, err := New(context.Background(), Options{ProjectRoot: root, Model: secondModel})
+	if err != nil {
+		t.Fatalf("second runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = secondRT.Close() })
+
+	resumed, err := secondRT.Resume(context.Background(), checkpointID)
+	if err != nil {
+		t.Fatalf("resume after restart: %v", err)
+	}
+	if resumed.Result.Output != "alpha\nbeta" {
+		t.Fatalf("unexpected resumed output: %+v", resumed.Result)
+	}
+}
+
+func TestRuntimeResumeConditionalPlanCheckpoint(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{responses: []*model.Response{
+		{Message: model.Message{Role: "assistant", Content: "alpha"}},
+		{Message: model.Message{Role: "assistant", Content: "beta"}},
+	}}
+	rt, err := New(context.Background(), Options{ProjectRoot: root, Model: mdl})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	branch := orchestration.Sequence(
+		orchestration.Node{Kind: orchestration.KindTask, Name: "alpha", Metadata: map[string]any{"prompt": "alpha"}},
+		orchestration.Node{Kind: orchestration.KindTask, Name: "pause", Metadata: map[string]any{"pause": "ask_user"}},
+		orchestration.Node{Kind: orchestration.KindTask, Name: "beta", Metadata: map[string]any{"prompt": "beta"}},
+	)
+	plan := orchestration.Conditional(
+		orchestration.When(`input.route == "tools"`, branch),
+		orchestration.Otherwise(orchestration.Node{Kind: orchestration.KindTask, Name: "chat", Metadata: map[string]any{"prompt": "chat"}}),
+	)
+
+	first, err := rt.Run(context.Background(), Request{Prompt: "ignored", Plan: &plan, Metadata: map[string]any{"route": "tools"}})
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if !first.Result.Interrupted {
+		t.Fatalf("expected conditional interrupt, got %+v", first.Result)
+	}
+	resumed, err := rt.Resume(context.Background(), first.Result.CheckpointID)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if resumed.Result.Output != "alpha\nbeta" {
+		t.Fatalf("unexpected resumed output: %+v", resumed.Result)
+	}
+}
+
+func TestRuntimeResumeParallelPlanCheckpoint(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{responses: []*model.Response{
+		{Message: model.Message{Role: "assistant", Content: "left"}},
+		{Message: model.Message{Role: "assistant", Content: "right"}},
+	}}
+	rt, err := New(context.Background(), Options{ProjectRoot: root, Model: mdl})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	plan := orchestration.Parallel(
+		orchestration.FanOut("left", orchestration.Node{Kind: orchestration.KindTask, Name: "left", Metadata: map[string]any{"prompt": "left"}}),
+		orchestration.FanOut("right", orchestration.Sequence(
+			orchestration.Node{Kind: orchestration.KindTask, Name: "pause", Metadata: map[string]any{"pause": "ask_user"}},
+			orchestration.Node{Kind: orchestration.KindTask, Name: "right", Metadata: map[string]any{"prompt": "right"}},
+		)),
+	)
+
+	first, err := rt.Run(context.Background(), Request{Prompt: "ignored", Plan: &plan})
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if !first.Result.Interrupted {
+		t.Fatalf("expected parallel interrupt, got %+v", first.Result)
+	}
+	resumed, err := rt.Resume(context.Background(), first.Result.CheckpointID)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if resumed.Result.Output != "left\nright" {
+		t.Fatalf("unexpected resumed output: %+v", resumed.Result)
+	}
+}
+
 func TestRuntimeApprovalResumeRoundTrip(t *testing.T) {
 	root := newClaudeProjectWithSettings(t, `{"permissions":{"ask":["echo"]},"sandbox":{"enabled":true}}`)
 	mdl := &stubModel{responses: []*model.Response{
@@ -630,6 +745,70 @@ func TestRuntimeApprovalResumeRoundTrip(t *testing.T) {
 	}
 	if toolImpl.calls != 1 {
 		t.Fatalf("expected tool execution after resume, got %d", toolImpl.calls)
+	}
+}
+
+func TestRuntimeApprovalResumeConsumesApprovedRecord(t *testing.T) {
+	root := newClaudeProjectWithSettings(t, `{"permissions":{"ask":["echo"]},"sandbox":{"enabled":true}}`)
+	approvalPath := filepath.Join(t.TempDir(), "approvals.json")
+	queue, err := security.NewApprovalQueue(approvalPath)
+	if err != nil {
+		t.Fatalf("approval queue: %v", err)
+	}
+
+	firstRT, err := New(context.Background(), Options{
+		ProjectRoot: root,
+		Model: &stubModel{responses: []*model.Response{
+			{Message: model.Message{Role: "assistant", ToolCalls: []model.ToolCall{{ID: "1", Name: "echo", Arguments: map[string]any{"text": "hi"}}}}},
+			{Message: model.Message{Role: "assistant", Content: "done"}},
+		}},
+		Tools:         []tool.Tool{&echoTool{}},
+		ApprovalQueue: queue,
+	})
+	if err != nil {
+		t.Fatalf("first runtime: %v", err)
+	}
+
+	first, err := firstRT.Run(context.Background(), Request{Prompt: "call tool", SessionID: "sess-approved", ToolWhitelist: []string{"echo"}})
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	pending := queue.ListPending()
+	if len(pending) != 1 {
+		t.Fatalf("expected one pending approval, got %+v", pending)
+	}
+	if _, err := queue.Approve(pending[0].ID, "tester", 0); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	_ = firstRT.Close()
+
+	secondQueue, err := security.NewApprovalQueue(approvalPath)
+	if err != nil {
+		t.Fatalf("reload queue: %v", err)
+	}
+	toolImpl := &echoTool{}
+	secondRT, err := New(context.Background(), Options{
+		ProjectRoot: root,
+		Model: &stubModel{responses: []*model.Response{
+			{Message: model.Message{Role: "assistant", Content: "done"}},
+		}},
+		Tools:         []tool.Tool{toolImpl},
+		ApprovalQueue: secondQueue,
+	})
+	if err != nil {
+		t.Fatalf("second runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = secondRT.Close() })
+
+	resumed, err := secondRT.Resume(context.Background(), first.Result.CheckpointID)
+	if err != nil {
+		t.Fatalf("resume approved record: %v", err)
+	}
+	if resumed.Result.Output != "done" {
+		t.Fatalf("unexpected resumed output: %+v", resumed.Result)
+	}
+	if toolImpl.calls != 1 {
+		t.Fatalf("expected tool execution after consuming approval, got %d", toolImpl.calls)
 	}
 }
 

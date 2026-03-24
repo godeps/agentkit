@@ -52,3 +52,28 @@ func TestTimelineBuildsUnifiedEntries(t *testing.T) {
 		}
 	}
 }
+
+func TestTimelineIncludesStreamEvents(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	resp := &Response{
+		StreamEvents: []StreamEvent{
+			{Type: EventAgentStart, Timestamp: now},
+			{Type: EventIterationStart, Timestamp: now.Add(time.Millisecond)},
+			{Type: EventToolExecutionStart, Timestamp: now.Add(2 * time.Millisecond), Name: "echo"},
+			{Type: EventToolExecutionResult, Timestamp: now.Add(3 * time.Millisecond), Name: "echo"},
+		},
+	}
+
+	timeline := BuildTimeline(resp)
+	seen := map[string]bool{}
+	for _, entry := range timeline {
+		seen[entry.Kind] = true
+	}
+	for _, kind := range []string{TimelineKindAgent, TimelineKindIteration, TimelineKindToolCall, TimelineKindToolResult} {
+		if !seen[kind] {
+			t.Fatalf("missing timeline kind %q in %+v", kind, timeline)
+		}
+	}
+}
