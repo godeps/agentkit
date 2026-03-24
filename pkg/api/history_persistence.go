@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/godeps/agentkit/pkg/message"
+	"github.com/godeps/agentkit/pkg/runtime/checkpoint"
 )
 
 type diskHistoryPersister struct {
@@ -49,6 +50,11 @@ func PersistedHistoryFilePath(projectRoot, sessionID string) string {
 		return ""
 	}
 	return p.filePath(sessionID)
+}
+
+// PersistedCheckpointDir returns the canonical checkpoint directory for a project.
+func PersistedCheckpointDir(projectRoot string) string {
+	return checkpoint.DiskStoreDir(projectRoot, "")
 }
 
 // LoadPersistedHistory loads a session history from disk using the runtime's
