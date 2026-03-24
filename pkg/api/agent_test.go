@@ -179,6 +179,141 @@ func TestRuntimeRequestOutputSchemaTextDisablesDefault(t *testing.T) {
 		t.Fatalf("ResponseFormat.JSONSchema=%+v, want nil", mdl.requests[0].ResponseFormat.JSONSchema)
 	}
 }
+
+func TestRuntimePostProcessOutputSchemaFormatsFinalText(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{responses: []*model.Response{
+		{
+			Message:    model.Message{Role: "assistant", Content: "summary text"},
+			Usage:      model.Usage{InputTokens: 1, OutputTokens: 2, TotalTokens: 3},
+			StopReason: "end_turn",
+		},
+		{
+			Message:    model.Message{Role: "assistant", Content: `{"summary":"ok"}`},
+			Usage:      model.Usage{InputTokens: 3, OutputTokens: 4, TotalTokens: 7},
+			StopReason: "stop",
+		},
+	}}
+	schema := &model.ResponseFormat{
+		Type: "json_schema",
+		JSONSchema: &model.OutputJSONSchema{
+			Name:   "summary",
+			Schema: map[string]any{"type": "object"},
+		},
+	}
+	rt, err := New(context.Background(), Options{
+		ProjectRoot:      root,
+		Model:            mdl,
+		OutputSchema:     schema,
+		OutputSchemaMode: OutputSchemaModePostProcess,
+	})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	resp, err := rt.Run(context.Background(), Request{Prompt: "hello"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if resp.Result == nil || resp.Result.Output != `{"summary":"ok"}` {
+		t.Fatalf("unexpected result: %+v", resp.Result)
+	}
+	if resp.Result.Usage.InputTokens != 4 || resp.Result.Usage.OutputTokens != 6 || resp.Result.Usage.TotalTokens != 10 {
+		t.Fatalf("unexpected merged usage: %+v", resp.Result.Usage)
+	}
+	if resp.Result.StopReason != "stop" {
+		t.Fatalf("StopReason=%q, want stop", resp.Result.StopReason)
+	}
+	if len(mdl.requests) != 2 {
+		t.Fatalf("expected 2 model requests, got %d", len(mdl.requests))
+	}
+	if mdl.requests[0].ResponseFormat != nil {
+		t.Fatalf("expected loop request without response format, got %+v", mdl.requests[0].ResponseFormat)
+	}
+	if mdl.requests[1].ResponseFormat == nil || mdl.requests[1].ResponseFormat.JSONSchema == nil || mdl.requests[1].ResponseFormat.JSONSchema.Name != "summary" {
+		t.Fatalf("unexpected formatting response format: %+v", mdl.requests[1].ResponseFormat)
+	}
+	if len(mdl.requests[1].Tools) != 0 {
+		t.Fatalf("expected formatting request without tools, got %+v", mdl.requests[1].Tools)
+	}
+}
+
+func TestRuntimePostProcessOutputSchemaSkipsFormattingForValidJSON(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{responses: []*model.Response{{
+		Message:    model.Message{Role: "assistant", Content: `{"summary":"ok"}`},
+		Usage:      model.Usage{InputTokens: 1, OutputTokens: 2, TotalTokens: 3},
+		StopReason: "end_turn",
+	}}}
+	rt, err := New(context.Background(), Options{
+		ProjectRoot: root,
+		Model:       mdl,
+		OutputSchema: &model.ResponseFormat{
+			Type: "json_object",
+		},
+		OutputSchemaMode: OutputSchemaModePostProcess,
+	})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	resp, err := rt.Run(context.Background(), Request{Prompt: "hello"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if resp.Result == nil || resp.Result.Output != `{"summary":"ok"}` {
+		t.Fatalf("unexpected result: %+v", resp.Result)
+	}
+	if len(mdl.requests) != 1 {
+		t.Fatalf("expected 1 model request, got %d", len(mdl.requests))
+	}
+	if mdl.requests[0].ResponseFormat != nil {
+		t.Fatalf("expected loop request without response format, got %+v", mdl.requests[0].ResponseFormat)
+	}
+}
+
+func TestRuntimePostProcessOutputSchemaFallsBackWhenFormattingFails(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{
+		responses: []*model.Response{{
+			Message:    model.Message{Role: "assistant", Content: "summary text"},
+			Usage:      model.Usage{InputTokens: 1, OutputTokens: 2, TotalTokens: 3},
+			StopReason: "end_turn",
+		}},
+		errSequence: []error{nil, errors.New("formatter unavailable")},
+	}
+	rt, err := New(context.Background(), Options{
+		ProjectRoot: root,
+		Model:       mdl,
+		OutputSchema: &model.ResponseFormat{
+			Type: "json_object",
+		},
+		OutputSchemaMode: OutputSchemaModePostProcess,
+	})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	resp, err := rt.Run(context.Background(), Request{Prompt: "hello"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if resp.Result == nil || resp.Result.Output != "summary text" {
+		t.Fatalf("unexpected result: %+v", resp.Result)
+	}
+	if resp.Result.Usage.TotalTokens != 3 {
+		t.Fatalf("unexpected usage after fallback: %+v", resp.Result.Usage)
+	}
+	if len(mdl.requests) != 2 {
+		t.Fatalf("expected 2 model requests, got %d", len(mdl.requests))
+	}
+	if mdl.requests[1].ResponseFormat == nil || mdl.requests[1].ResponseFormat.Type != "json_object" {
+		t.Fatalf("unexpected formatting request: %+v", mdl.requests[1].ResponseFormat)
+	}
+}
 func TestRuntimePropagatesModelError(t *testing.T) {
 	root := newClaudeProject(t)
 	mdl := &stubModel{err: errors.New("model refused")}
@@ -537,6 +672,80 @@ func TestRuntimeToolExecutor_PreToolUseDenialAddsToolResult(t *testing.T) {
 	}
 }
 
+func TestRuntimeToolExecutor_WhitelistRejectionAddsToolResult(t *testing.T) {
+	history := message.NewHistory()
+	reg := tool.NewRegistry()
+	exec := tool.NewExecutor(reg, nil)
+	rtExec := &runtimeToolExecutor{
+		executor: exec,
+		hooks:    &runtimeHookAdapter{},
+		history:  history,
+		allow:    map[string]struct{}{"file_read": {}},
+		host:     "localhost",
+	}
+
+	call := agent.ToolCall{ID: "c1", Name: "glob", Input: map[string]any{"pattern": "*.go"}}
+	res, err := rtExec.Execute(context.Background(), call, agent.NewContext())
+	if err == nil {
+		t.Fatal("expected whitelist error")
+	}
+	if got, want := err.Error(), "tool glob is not whitelisted"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+	if res.Name != "" || res.Output != "" || len(res.Metadata) != 0 {
+		t.Fatalf("expected zero-value result on early error, got %+v", res)
+	}
+
+	msgs := history.All()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 history entry, got %d", len(msgs))
+	}
+	if msgs[0].Role != "tool" || len(msgs[0].ToolCalls) != 1 {
+		t.Fatalf("expected tool history entry, got %+v", msgs[0])
+	}
+	if msgs[0].ToolCalls[0].ID != call.ID || msgs[0].ToolCalls[0].Name != call.Name {
+		t.Fatalf("unexpected tool call in history: %+v", msgs[0].ToolCalls[0])
+	}
+	if got, want := msgs[0].ToolCalls[0].Result, "Tool execution failed: tool glob is not whitelisted"; got != want {
+		t.Fatalf("tool result = %q, want %q", got, want)
+	}
+}
+
+func TestRuntimeToolExecutor_UninitializedExecutorAddsToolResult(t *testing.T) {
+	history := message.NewHistory()
+	rtExec := &runtimeToolExecutor{
+		hooks:   &runtimeHookAdapter{},
+		history: history,
+		host:    "localhost",
+	}
+
+	call := agent.ToolCall{ID: "c1", Name: "echo", Input: map[string]any{"text": "hi"}}
+	res, err := rtExec.Execute(context.Background(), call, agent.NewContext())
+	if err == nil {
+		t.Fatal("expected initialization error")
+	}
+	if got, want := err.Error(), "tool executor not initialised"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+	if res.Name != "" || res.Output != "" || len(res.Metadata) != 0 {
+		t.Fatalf("expected zero-value result on early error, got %+v", res)
+	}
+
+	msgs := history.All()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 history entry, got %d", len(msgs))
+	}
+	if msgs[0].Role != "tool" || len(msgs[0].ToolCalls) != 1 {
+		t.Fatalf("expected tool history entry, got %+v", msgs[0])
+	}
+	if msgs[0].ToolCalls[0].ID != call.ID || msgs[0].ToolCalls[0].Name != call.Name {
+		t.Fatalf("unexpected tool call in history: %+v", msgs[0].ToolCalls[0])
+	}
+	if got, want := msgs[0].ToolCalls[0].Result, "Tool execution failed: tool executor not initialised"; got != want {
+		t.Fatalf("tool result = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeToolExecutor_PropagatesOutputRef(t *testing.T) {
 	reg := tool.NewRegistry()
 	ref := &tool.OutputRef{Path: "/tmp/out", SizeBytes: 123, Truncated: true}
@@ -798,14 +1007,21 @@ func TestRuntimeCacheConfigPriority(t *testing.T) {
 }
 
 type stubModel struct {
-	responses []*model.Response
-	requests  []model.Request
-	idx       int
-	err       error
+	responses   []*model.Response
+	requests    []model.Request
+	errSequence []error
+	idx         int
+	err         error
 }
 
 func (s *stubModel) Complete(_ context.Context, req model.Request) (*model.Response, error) {
 	s.requests = append(s.requests, req)
+	if len(s.errSequence) > 0 {
+		i := len(s.requests) - 1
+		if i < len(s.errSequence) && s.errSequence[i] != nil {
+			return nil, s.errSequence[i]
+		}
+	}
 	if s.err != nil {
 		return nil, s.err
 	}

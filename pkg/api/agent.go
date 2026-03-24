@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -617,6 +618,7 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		tools:         availableTools(rt.registry, prep.toolWhitelist),
 		systemPrompt:  rt.opts.SystemPrompt,
 		outputSchema:  effectiveOutputSchema(prep.normalized.OutputSchema, rt.opts.OutputSchema),
+		outputMode:    effectiveOutputSchemaMode(prep.normalized.OutputSchemaMode, rt.opts.OutputSchemaMode),
 		rulesLoader:   rt.rulesLoader,
 		enableCache:   enableCache,
 		hooks:         hookAdapter,
@@ -671,8 +673,10 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 	if err != nil {
 		return runResult{}, err
 	}
+	result := runResult{output: out, usage: modelAdapter.usage, reason: modelAdapter.stopReason}
+	result = rt.applyOutputSchema(prep.ctx, selectedModel, prep.history, modelAdapter.outputSchema, modelAdapter.outputMode, result)
 	if rt.tokens != nil && rt.tokens.IsEnabled() {
-		stats := tokenStatsFromUsage(modelAdapter.usage, "", prep.normalized.SessionID, prep.normalized.RequestID)
+		stats := tokenStatsFromUsage(result.usage, "", prep.normalized.SessionID, prep.normalized.RequestID)
 		rt.tokens.Record(stats)
 		payload := coreevents.TokenUsagePayload{
 			InputTokens:   stats.InputTokens,
@@ -702,7 +706,7 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 			})
 		}
 	}
-	return runResult{output: out, usage: modelAdapter.usage, reason: modelAdapter.stopReason}, nil
+	return result, nil
 }
 
 func (rt *Runtime) buildResponse(prep preparedRun, result runResult) *Response {
@@ -1113,6 +1117,13 @@ func effectiveOutputSchema(requestSchema, defaultSchema *model.ResponseFormat) *
 	return cloneResponseFormat(defaultSchema)
 }
 
+func effectiveOutputSchemaMode(requestMode, defaultMode OutputSchemaMode) OutputSchemaMode {
+	if requestMode != "" {
+		return normalizeOutputSchemaMode(requestMode)
+	}
+	return normalizeOutputSchemaMode(defaultMode)
+}
+
 // ----------------- adapters -----------------
 
 type conversationModel struct {
@@ -1124,6 +1135,7 @@ type conversationModel struct {
 	tools         []model.ToolDefinition
 	systemPrompt  string
 	outputSchema  *model.ResponseFormat
+	outputMode    OutputSchemaMode
 	rulesLoader   *config.RulesLoader
 	enableCache   bool // Enable prompt caching for this conversation
 	usage         model.Usage
@@ -1176,7 +1188,9 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 		Model:             "",
 		Temperature:       nil,
 		EnablePromptCache: m.enableCache,
-		ResponseFormat:    cloneResponseFormat(m.outputSchema),
+	}
+	if m.outputMode != OutputSchemaModePostProcess {
+		req.ResponseFormat = cloneResponseFormat(m.outputSchema)
 	}
 
 	// Populate middleware state with model request if available
@@ -1242,6 +1256,66 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 	return out, nil
 }
 
+func (rt *Runtime) applyOutputSchema(
+	ctx context.Context,
+	mdl model.Model,
+	history *message.History,
+	schema *model.ResponseFormat,
+	mode OutputSchemaMode,
+	result runResult,
+) runResult {
+	if mdl == nil || schema == nil || normalizeOutputSchemaMode(mode) != OutputSchemaModePostProcess || result.output == nil {
+		return result
+	}
+	content := strings.TrimSpace(result.output.Content)
+	if content == "" || len(result.output.ToolCalls) > 0 || json.Valid([]byte(content)) {
+		return result
+	}
+	req := model.Request{
+		Messages: []model.Message{{
+			Role:    "user",
+			Content: "Extract the final structured result from the conversation above. Return only the JSON result.",
+		}},
+		System:            "You are a formatting assistant. Return only the final JSON result with no explanation.",
+		EnablePromptCache: false,
+		ResponseFormat:    cloneResponseFormat(schema),
+	}
+	if history != nil {
+		if snapshot := history.All(); len(snapshot) > 0 {
+			req.Messages = append(convertMessages(snapshot), req.Messages...)
+		}
+	}
+	var resp *model.Response
+	if err := mdl.CompleteStream(ctx, req, func(sr model.StreamResult) error {
+		if sr.Final && sr.Response != nil {
+			resp = sr.Response
+		}
+		return nil
+	}); err != nil || resp == nil {
+		return result
+	}
+	result.output.Content = strings.TrimSpace(resp.Message.Content)
+	result.usage = mergeModelUsage(result.usage, resp.Usage)
+	if strings.TrimSpace(resp.StopReason) != "" {
+		result.reason = resp.StopReason
+	}
+	return result
+}
+
+func mergeModelUsage(base, extra model.Usage) model.Usage {
+	merged := model.Usage{
+		InputTokens:         base.InputTokens + extra.InputTokens,
+		OutputTokens:        base.OutputTokens + extra.OutputTokens,
+		CacheReadTokens:     base.CacheReadTokens + extra.CacheReadTokens,
+		CacheCreationTokens: base.CacheCreationTokens + extra.CacheCreationTokens,
+	}
+	merged.TotalTokens = base.TotalTokens + extra.TotalTokens
+	if merged.TotalTokens == 0 {
+		merged.TotalTokens = merged.InputTokens + merged.OutputTokens
+	}
+	return merged
+}
+
 type runtimeToolExecutor struct {
 	executor  *tool.Executor
 	hooks     *runtimeHookAdapter
@@ -1285,11 +1359,35 @@ func (t *runtimeToolExecutor) isAllowed(ctx context.Context, name string) bool {
 }
 
 func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, _ *agent.Context) (agent.ToolResult, error) {
+	appendToolResult := func(content string, blocks []model.ContentBlock) {
+		if t.history != nil {
+			t.history.Append(message.Message{
+				Role: "tool",
+				ToolCalls: []message.ToolCall{{
+					ID:     call.ID,
+					Name:   call.Name,
+					Result: content,
+				}},
+			})
+			if len(blocks) > 0 {
+				t.history.Append(message.Message{
+					Role:          "user",
+					Content:       fmt.Sprintf("[multimodal content from tool: %s]", call.Name),
+					ContentBlocks: convertAPIContentBlocks(blocks),
+				})
+			}
+		}
+	}
+	appendEarlyError := func(err error) error {
+		appendToolResult(fmt.Sprintf("Tool execution failed: %v", err), nil)
+		return err
+	}
+
 	if t.executor == nil {
-		return agent.ToolResult{}, errors.New("tool executor not initialised")
+		return agent.ToolResult{}, appendEarlyError(errors.New("tool executor not initialised"))
 	}
 	if !t.isAllowed(ctx, call.Name) {
-		return agent.ToolResult{}, fmt.Errorf("tool %s is not whitelisted", call.Name)
+		return agent.ToolResult{}, appendEarlyError(fmt.Errorf("tool %s is not whitelisted", call.Name))
 	}
 
 	// Defensive check: if tool call has empty/nil arguments but the tool requires
@@ -1320,27 +1418,6 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 						Metadata: map[string]any{"error": "empty_arguments"},
 					}, nil
 				}
-			}
-		}
-	}
-
-	// Helper to append tool result to history.
-	appendToolResult := func(content string, blocks []model.ContentBlock) {
-		if t.history != nil {
-			t.history.Append(message.Message{
-				Role: "tool",
-				ToolCalls: []message.ToolCall{{
-					ID:     call.ID,
-					Name:   call.Name,
-					Result: content,
-				}},
-			})
-			if len(blocks) > 0 {
-				t.history.Append(message.Message{
-					Role:          "user",
-					Content:       fmt.Sprintf("[multimodal content from tool: %s]", call.Name),
-					ContentBlocks: convertAPIContentBlocks(blocks),
-				})
 			}
 		}
 	}

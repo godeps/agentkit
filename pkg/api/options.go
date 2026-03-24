@@ -55,6 +55,18 @@ const (
 	ModelTierHigh ModelTier = "high" // High cost: Opus
 )
 
+// OutputSchemaMode controls when OutputSchema is applied during an agent run.
+type OutputSchemaMode string
+
+const (
+	// OutputSchemaModeInline preserves the historical behavior by forwarding
+	// ResponseFormat on each agent-loop model call.
+	OutputSchemaModeInline OutputSchemaMode = "inline"
+	// OutputSchemaModePostProcess runs the loop without ResponseFormat and, if
+	// needed, performs one extra formatting pass on the final text output.
+	OutputSchemaModePostProcess OutputSchemaMode = "post_process"
+)
+
 // CLIContext captures optional metadata supplied by the CLI surface.
 type CLIContext struct {
 	User      string
@@ -189,6 +201,9 @@ type Options struct {
 
 	// OutputSchema constrains model text responses when the provider supports structured output.
 	OutputSchema *model.ResponseFormat
+	// OutputSchemaMode controls whether OutputSchema is applied inline during the
+	// agent loop or via a separate post-processing pass. Empty defaults to inline.
+	OutputSchemaMode OutputSchemaMode
 
 	SystemPrompt string
 	RulesEnabled *bool // nil = 默认启用，false = 禁用
@@ -289,6 +304,7 @@ type Request struct {
 	Model             ModelTier // Optional: override model tier for this request
 	EnablePromptCache *bool     // Optional: enable prompt caching (nil uses global default)
 	OutputSchema      *model.ResponseFormat
+	OutputSchemaMode  OutputSchemaMode
 	Traits            []string
 	Tags              map[string]string
 	Channels          []string
@@ -445,6 +461,7 @@ func (o Options) withDefaults() Options {
 func (o Options) frozen() Options {
 	o.Mode = freezeMode(o.Mode)
 	o.OutputSchema = cloneResponseFormat(o.OutputSchema)
+	o.OutputSchemaMode = normalizeOutputSchemaMode(o.OutputSchemaMode)
 
 	if len(o.Middleware) > 0 {
 		o.Middleware = append([]middleware.Middleware(nil), o.Middleware...)
@@ -758,6 +775,17 @@ func (r Request) normalized(defaultMode ModeContext, fallbackSession string) Req
 	}
 	req.OutputSchema = cloneResponseFormat(req.OutputSchema)
 	return req
+}
+
+func normalizeOutputSchemaMode(mode OutputSchemaMode) OutputSchemaMode {
+	switch mode {
+	case "", OutputSchemaModeInline:
+		return OutputSchemaModeInline
+	case OutputSchemaModePostProcess:
+		return OutputSchemaModePostProcess
+	default:
+		return OutputSchemaModeInline
+	}
 }
 
 func (r Request) activationContext(prompt string) skills.ActivationContext {

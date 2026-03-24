@@ -39,6 +39,7 @@ func TestOptionsFrozenClonesCollections(t *testing.T) {
 				},
 			},
 		},
+		OutputSchemaMode: OutputSchemaModePostProcess,
 		EnabledBuiltinTools: []string{
 			"bash",
 		},
@@ -82,6 +83,9 @@ func TestOptionsFrozenClonesCollections(t *testing.T) {
 	if frozen.OutputSchema == nil || frozen.OutputSchema.JSONSchema == nil {
 		t.Fatalf("expected frozen output schema")
 	}
+	if frozen.OutputSchemaMode != OutputSchemaModePostProcess {
+		t.Fatalf("OutputSchemaMode=%q, want %q", frozen.OutputSchemaMode, OutputSchemaModePostProcess)
+	}
 	if frozen.OutputSchema.JSONSchema.Name != "storyboard" {
 		t.Fatalf("unexpected output schema name %q", frozen.OutputSchema.JSONSchema.Name)
 	}
@@ -114,11 +118,15 @@ func TestRequestNormalizedClonesOutputSchema(t *testing.T) {
 				},
 			},
 		},
+		OutputSchemaMode: OutputSchemaModePostProcess,
 	}
 
 	normalized := req.normalized(ModeContext{EntryPoint: EntryPointCLI}, "sess")
 	if normalized.OutputSchema == nil || normalized.OutputSchema.JSONSchema == nil {
 		t.Fatalf("expected normalized output schema")
+	}
+	if normalized.OutputSchemaMode != OutputSchemaModePostProcess {
+		t.Fatalf("OutputSchemaMode=%q, want %q", normalized.OutputSchemaMode, OutputSchemaModePostProcess)
 	}
 	if normalized.OutputSchema.JSONSchema.Name != "storyboard" {
 		t.Fatalf("unexpected output schema name %q", normalized.OutputSchema.JSONSchema.Name)
