@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/godeps/agentkit/pkg/artifact"
+	"github.com/godeps/agentkit/pkg/runtime/cache"
 	"github.com/godeps/agentkit/pkg/tool"
 )
 
@@ -30,6 +31,7 @@ type Result struct {
 type Executor struct {
 	RunTool  func(context.Context, Step, []artifact.ArtifactRef) (*tool.ToolResult, error)
 	RunSkill func(context.Context, Step, []artifact.ArtifactRef) (*tool.ToolResult, error)
+	Cache    cache.Store
 }
 
 // Execute runs a declared pipeline step and returns its aggregated result.
@@ -126,6 +128,14 @@ func (e Executor) executeLeaf(ctx context.Context, step Step, input Input) (Resu
 	if len(step.Input) > 0 {
 		refs = step.Input
 	}
+	cacheKey := e.cacheKey(step, refs)
+	if e.Cache != nil && cacheKey != "" {
+		if cached, ok, err := e.Cache.Load(ctx, cacheKey); err != nil {
+			return Result{}, err
+		} else if ok {
+			return toolResultToPipelineResult(cached, refs, step.Name), nil
+		}
+	}
 
 	var (
 		res *tool.ToolResult
@@ -164,7 +174,52 @@ func (e Executor) executeLeaf(ctx context.Context, step Step, input Input) (Resu
 			result.Lineage.AddEdge(src, derived, step.Name)
 		}
 	}
+	if e.Cache != nil && cacheKey != "" {
+		if err := e.Cache.Save(ctx, cacheKey, pipelineResultToToolResult(result)); err != nil {
+			return Result{}, err
+		}
+	}
 	return result, nil
+}
+
+func (e Executor) cacheKey(step Step, refs []artifact.ArtifactRef) artifact.CacheKey {
+	target := step.Tool
+	if target == "" {
+		target = step.Skill
+	}
+	if target == "" {
+		return ""
+	}
+	return artifact.NewCacheKey(target, step.With, refs)
+}
+
+func toolResultToPipelineResult(res *tool.ToolResult, refs []artifact.ArtifactRef, stepName string) Result {
+	if res == nil {
+		return Result{}
+	}
+	result := Result{
+		Output:     res.Output,
+		Summary:    res.Summary,
+		Artifacts:  append([]artifact.ArtifactRef(nil), res.Artifacts...),
+		Structured: res.Structured,
+		Preview:    res.Preview,
+	}
+	for _, src := range refs {
+		for _, derived := range result.Artifacts {
+			result.Lineage.AddEdge(src, derived, stepName)
+		}
+	}
+	return result
+}
+
+func pipelineResultToToolResult(result Result) *tool.ToolResult {
+	return &tool.ToolResult{
+		Output:     result.Output,
+		Summary:    result.Summary,
+		Artifacts:  append([]artifact.ArtifactRef(nil), result.Artifacts...),
+		Structured: result.Structured,
+		Preview:    result.Preview,
+	}
 }
 
 func mergeResults(base, next Result) Result {

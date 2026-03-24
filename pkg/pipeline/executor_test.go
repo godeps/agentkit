@@ -8,6 +8,7 @@ import (
 
 	"github.com/godeps/agentkit/pkg/artifact"
 	"github.com/godeps/agentkit/pkg/tool"
+	"github.com/godeps/agentkit/pkg/runtime/cache"
 )
 
 func TestExecutorSequentialStepExecution(t *testing.T) {
@@ -198,5 +199,78 @@ func TestExecutorRetryingFailedStepOnly(t *testing.T) {
 	}
 	if result.Output != "recovered" {
 		t.Fatalf("expected retry result to surface final success, got %+v", result)
+	}
+}
+
+func TestExecutorCacheHitSkipsExpensiveStep(t *testing.T) {
+	calls := 0
+	exec := Executor{
+		Cache: cache.NewMemoryStore(),
+		RunTool: func(ctx context.Context, step Step, input []artifact.ArtifactRef) (*tool.ToolResult, error) {
+			calls++
+			return &tool.ToolResult{Output: "generated"}, nil
+		},
+	}
+	step := Step{
+		Name: "caption",
+		Tool: "captioner",
+		With: map[string]any{"prompt": "describe"},
+		Input: []artifact.ArtifactRef{
+			artifact.NewGeneratedRef("art_1", artifact.ArtifactKindImage),
+		},
+	}
+
+	first, err := exec.Execute(context.Background(), step, Input{})
+	if err != nil {
+		t.Fatalf("first execution: %v", err)
+	}
+	second, err := exec.Execute(context.Background(), step, Input{})
+	if err != nil {
+		t.Fatalf("second execution: %v", err)
+	}
+
+	if calls != 1 {
+		t.Fatalf("expected cached second execution to skip tool call, got %d calls", calls)
+	}
+	if first.Output != second.Output {
+		t.Fatalf("expected cached result to match original, got %+v and %+v", first, second)
+	}
+}
+
+func TestExecutorCacheMissWhenInputsChange(t *testing.T) {
+	calls := 0
+	exec := Executor{
+		Cache: cache.NewMemoryStore(),
+		RunTool: func(ctx context.Context, step Step, input []artifact.ArtifactRef) (*tool.ToolResult, error) {
+			calls++
+			return &tool.ToolResult{Output: fmt.Sprintf("call-%d", calls)}, nil
+		},
+	}
+
+	_, err := exec.Execute(context.Background(), Step{
+		Name: "caption",
+		Tool: "captioner",
+		With: map[string]any{"prompt": "first"},
+		Input: []artifact.ArtifactRef{
+			artifact.NewGeneratedRef("art_1", artifact.ArtifactKindImage),
+		},
+	}, Input{})
+	if err != nil {
+		t.Fatalf("first execution: %v", err)
+	}
+	_, err = exec.Execute(context.Background(), Step{
+		Name: "caption",
+		Tool: "captioner",
+		With: map[string]any{"prompt": "second"},
+		Input: []artifact.ArtifactRef{
+			artifact.NewGeneratedRef("art_1", artifact.ArtifactKindImage),
+		},
+	}, Input{})
+	if err != nil {
+		t.Fatalf("second execution: %v", err)
+	}
+
+	if calls != 2 {
+		t.Fatalf("expected changed params to bypass cache, got %d calls", calls)
 	}
 }
