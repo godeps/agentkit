@@ -21,7 +21,7 @@ type fakeSharedEngine struct {
 	skills []clikit.SkillMeta
 }
 
-func (f fakeSharedEngine) RunStream(context.Context, string, string) (<-chan api.StreamEvent, error) {
+func (f fakeSharedEngine) RunStream(context.Context, api.Request) (<-chan api.StreamEvent, error) {
 	ch := make(chan api.StreamEvent, len(f.events))
 	for _, evt := range f.events {
 		ch <- evt
@@ -71,7 +71,7 @@ func TestSharedClikitStreamRendersToolProgress(t *testing.T) {
 
 	var out bytes.Buffer
 	var errOut bytes.Buffer
-	if err := clikit.RunStream(context.Background(), &out, &errOut, engine, "sess-1", "hi", 0, false, clikit.WaterfallModeSummary); err != nil {
+	if err := clikit.RunStream(context.Background(), &out, &errOut, engine, api.Request{SessionID: "sess-1", Prompt: "hi"}, 0, false, clikit.WaterfallModeSummary); err != nil {
 		t.Fatalf("RunStream: %v", err)
 	}
 	got := out.String()

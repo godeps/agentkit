@@ -2,10 +2,14 @@ package clikit
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/godeps/agentkit/pkg/api"
 )
 
 func TestMultiValueSet(t *testing.T) {
@@ -258,5 +262,30 @@ func TestResolveToolResultName(t *testing.T) {
 		if got := resolveToolResultName(tc.evtName, tc.fallback); got != tc.want {
 			t.Fatalf("resolveToolResultName(%q,%q)=%q want=%q", tc.evtName, tc.fallback, got, tc.want)
 		}
+	}
+}
+
+type errorStreamEngine struct{}
+
+func (errorStreamEngine) RunStream(context.Context, api.Request) (<-chan api.StreamEvent, error) {
+	ch := make(chan api.StreamEvent, 1)
+	ch <- api.StreamEvent{Type: api.EventError, Output: "boom"}
+	close(ch)
+	return ch, nil
+}
+
+func (errorStreamEngine) ModelTurnCount(string) int                   { return 0 }
+func (errorStreamEngine) ModelTurnsSince(string, int) []ModelTurnStat { return nil }
+func (errorStreamEngine) RepoRoot() string                            { return "" }
+
+func TestRunStreamReturnsErrorOnEventError(t *testing.T) {
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	err := RunStream(context.Background(), &out, &errOut, errorStreamEngine{}, api.Request{Prompt: "hi", SessionID: "sess-1"}, 100, false, WaterfallModeOff)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !errors.Is(err, errStreamFailed) {
+		t.Fatalf("expected stream failed error, got %v", err)
 	}
 }

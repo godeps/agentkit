@@ -2,6 +2,7 @@ package clikit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -11,7 +12,9 @@ import (
 	"github.com/godeps/agentkit/pkg/api"
 )
 
-func RunStream(parent context.Context, out, errOut io.Writer, eng StreamEngine, sessionID, prompt string, timeoutMs int, verbose bool, waterfallMode string) error {
+var errStreamFailed = errors.New("rendered stream failed")
+
+func RunStream(parent context.Context, out, errOut io.Writer, eng StreamEngine, req api.Request, timeoutMs int, verbose bool, waterfallMode string) error {
 	runStartedAt := time.Now()
 	if out == nil {
 		out = io.Discard
@@ -32,12 +35,12 @@ func RunStream(parent context.Context, out, errOut io.Writer, eng StreamEngine, 
 	}
 	defer cancel()
 
-	ch, err := eng.RunStream(ctx, sessionID, prompt)
+	ch, err := eng.RunStream(ctx, req)
 	if err != nil {
 		return err
 	}
 
-	tracer := newWaterfallTracer(eng, sessionID)
+	tracer := newWaterfallTracer(eng, req.SessionID)
 	toolStartAt := make(map[string]time.Time)
 	toolNameByID := make(map[string]string)
 	llmBlockOpen := false
@@ -45,6 +48,7 @@ func RunStream(parent context.Context, out, errOut io.Writer, eng StreamEngine, 
 	lastLLMResponse := ""
 	useANSI := supportsANSI(out)
 	var imageArtifact *artifactInfo
+	var streamErr error
 
 	for evt := range ch {
 		tracer.OnEvent(evt)
@@ -123,6 +127,9 @@ func RunStream(parent context.Context, out, errOut io.Writer, eng StreamEngine, 
 				fmt.Fprintf(errOut, "%v\n", evt.Output)
 				printBlockFooter(errOut)
 			}
+			if streamErr == nil {
+				streamErr = fmt.Errorf("%w: %v", errStreamFailed, evt.Output)
+			}
 		}
 	}
 	if llmBlockOpen {
@@ -143,6 +150,9 @@ func RunStream(parent context.Context, out, errOut io.Writer, eng StreamEngine, 
 	}
 	if NormalizeWaterfallMode(waterfallMode) != WaterfallModeOff {
 		tracer.Print(out, NormalizeWaterfallMode(waterfallMode))
+	}
+	if streamErr != nil {
+		return streamErr
 	}
 	return nil
 }

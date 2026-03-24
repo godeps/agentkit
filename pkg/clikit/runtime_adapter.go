@@ -3,6 +3,7 @@ package clikit
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"github.com/godeps/agentkit/pkg/api"
 	"github.com/godeps/agentkit/pkg/middleware"
@@ -32,6 +33,8 @@ type RuntimeAdapter struct {
 	skillsDirs      []string
 	skillsRecursive bool
 	turnRecorder    *api.ModelTurnRecorder
+	skillsOnce      sync.Once
+	skillsCached    []SkillMeta
 }
 
 type TurnRecorder = api.ModelTurnRecorder
@@ -100,8 +103,8 @@ func (a *RuntimeAdapter) RepoRoot() string {
 	return a.projectRoot
 }
 
-func (a *RuntimeAdapter) RunStream(ctx context.Context, sessionID, prompt string) (<-chan api.StreamEvent, error) {
-	return a.runtime.RunStream(ctx, api.Request{Prompt: prompt, SessionID: sessionID})
+func (a *RuntimeAdapter) RunStream(ctx context.Context, req api.Request) (<-chan api.StreamEvent, error) {
+	return a.runtime.RunStream(ctx, req)
 }
 
 func (a *RuntimeAdapter) Timeline(resp *api.Response) []api.TimelineEntry {
@@ -139,39 +142,43 @@ func (a *RuntimeAdapter) Skills() []SkillMeta {
 	if a == nil {
 		return nil
 	}
-	if withSkills, ok := a.runtime.(interface{ AvailableSkills() []api.AvailableSkill }); ok {
-		src := withSkills.AvailableSkills()
-		out := make([]SkillMeta, 0, len(src))
-		for _, skill := range src {
-			name := strings.TrimSpace(skill.Name)
+	a.skillsOnce.Do(func() {
+		if withSkills, ok := a.runtime.(interface{ AvailableSkills() []api.AvailableSkill }); ok {
+			src := withSkills.AvailableSkills()
+			out := make([]SkillMeta, 0, len(src))
+			for _, skill := range src {
+				name := strings.TrimSpace(skill.Name)
+				if name == "" {
+					continue
+				}
+				out = append(out, SkillMeta{Name: name})
+			}
+			a.skillsCached = out
+			return
+		}
+		var recursive *bool
+		if a.skillsRecursive {
+			recursive = boolPtr(true)
+		} else {
+			recursive = boolPtr(false)
+		}
+		regs, _ := runtimeskills.LoadFromFS(runtimeskills.LoaderOptions{
+			ProjectRoot: a.projectRoot,
+			ConfigRoot:  a.configRoot,
+			Directories: a.skillsDirs,
+			Recursive:   recursive,
+		})
+		out := make([]SkillMeta, 0, len(regs))
+		for _, reg := range regs {
+			name := strings.TrimSpace(reg.Definition.Name)
 			if name == "" {
 				continue
 			}
 			out = append(out, SkillMeta{Name: name})
 		}
-		return out
-	}
-	var recursive *bool
-	if a.skillsRecursive {
-		recursive = boolPtr(true)
-	} else {
-		recursive = boolPtr(false)
-	}
-	regs, _ := runtimeskills.LoadFromFS(runtimeskills.LoaderOptions{
-		ProjectRoot: a.projectRoot,
-		ConfigRoot:  a.configRoot,
-		Directories: a.skillsDirs,
-		Recursive:   recursive,
+		a.skillsCached = out
 	})
-	out := make([]SkillMeta, 0, len(regs))
-	for _, reg := range regs {
-		name := strings.TrimSpace(reg.Definition.Name)
-		if name == "" {
-			continue
-		}
-		out = append(out, SkillMeta{Name: name})
-	}
-	return out
+	return append([]SkillMeta(nil), a.skillsCached...)
 }
 
 func (a *RuntimeAdapter) SandboxBackend() string {

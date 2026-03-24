@@ -135,10 +135,13 @@ func TestRunStreamUsesClikitRendererWhenEnabled(t *testing.T) {
 		return rt, nil
 	}
 	called := false
-	clikitRunStream = func(ctx context.Context, out, errOut io.Writer, eng streamEngine, sessionID, prompt string, timeoutMs int, verbose bool, waterfallMode string) error {
+	clikitRunStream = func(ctx context.Context, out, errOut io.Writer, eng streamEngine, req api.Request, timeoutMs int, verbose bool, waterfallMode string) error {
 		called = true
-		if prompt != "hi" {
-			t.Fatalf("unexpected prompt: %q", prompt)
+		if req.Prompt != "hi" {
+			t.Fatalf("unexpected prompt: %q", req.Prompt)
+		}
+		if req.Mode.EntryPoint != api.EntryPointCLI || req.Mode.CLI == nil {
+			t.Fatalf("expected full request context, got %+v", req.Mode)
 		}
 		return nil
 	}
@@ -173,6 +176,32 @@ func TestRunStreamJSONRemainsMachineReadableByDefault(t *testing.T) {
 	}
 	if got := stdout.String(); !strings.Contains(got, `"type":"message_stop"`) {
 		t.Fatalf("expected json stream output, got: %s", got)
+	}
+}
+
+func TestRunStreamJSONReturnsErrorOnEventError(t *testing.T) {
+	origFactory := runtimeFactory
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+	})
+	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
+		return &fakeRuntime{
+			runStreamFn: func(context.Context, api.Request) (<-chan api.StreamEvent, error) {
+				ch := make(chan api.StreamEvent, 1)
+				ch <- api.StreamEvent{Type: api.EventError, Output: "boom"}
+				close(ch)
+				return ch, nil
+			},
+		}, nil
+	}
+
+	var stdout bytes.Buffer
+	err := run([]string{"--prompt", "hi", "--stream"}, &stdout, io.Discard)
+	if err == nil {
+		t.Fatalf("expected stream error")
+	}
+	if got := stdout.String(); !strings.Contains(got, `"type":"error"`) {
+		t.Fatalf("expected json event output, got: %s", got)
 	}
 }
 
@@ -222,6 +251,28 @@ func TestCLIReplUsesInteractiveShell(t *testing.T) {
 	}
 	if !called {
 		t.Fatalf("expected interactive shell to be called")
+	}
+}
+
+func TestCLIReplPropagatesInteractiveShellError(t *testing.T) {
+	origFactory := runtimeFactory
+	origRunInteractive := clikitRunInteractiveShell
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+		clikitRunInteractiveShell = origRunInteractive
+	})
+	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
+		return &fakeRuntime{}, nil
+	}
+
+	want := errors.New("shell boom")
+	clikitRunInteractiveShell = func(ctx context.Context, in io.ReadCloser, out, errOut io.Writer, eng replEngine, timeoutMs int, verbose bool, waterfallMode string, initialSessionID string) error {
+		return want
+	}
+
+	err := run([]string{"--repl"}, io.Discard, io.Discard)
+	if !errors.Is(err, want) {
+		t.Fatalf("expected interactive shell error, got %v", err)
 	}
 }
 

@@ -219,7 +219,7 @@ func run(argv []string, stdout, stderr io.Writer) error {
 		case "", "json":
 			return streamRunJSON(ctx, runtime, req, stdout, stderr, *verbose)
 		case "rendered", "human", "pretty":
-			return clikitRunStream(ctx, stdout, stderr, adapter, req.SessionID, req.Prompt, *timeoutMs, *verbose, *waterfall)
+			return clikitRunStream(ctx, stdout, stderr, adapter, req, *timeoutMs, *verbose, *waterfall)
 		default:
 			return fmt.Errorf("unsupported stream format %q", *streamFormat)
 		}
@@ -391,6 +391,7 @@ func streamRunJSON(ctx context.Context, rt runtimeClient, req api.Request, out, 
 		return err
 	}
 	encoder := json.NewEncoder(out)
+	var streamErr error
 	for evt := range ch {
 		if verbose && errOut != nil {
 			switch evt.Type {
@@ -401,8 +402,11 @@ func streamRunJSON(ctx context.Context, rt runtimeClient, req api.Request, out, 
 		if err := encoder.Encode(evt); err != nil {
 			return err
 		}
+		if evt.Type == api.EventError && streamErr == nil {
+			streamErr = fmt.Errorf("stream failed: %v", evt.Output)
+		}
 	}
-	return nil
+	return streamErr
 }
 
 type multiValue []string

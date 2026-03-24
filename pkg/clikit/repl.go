@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/chzyer/readline"
+	"github.com/godeps/agentkit/pkg/api"
 	"github.com/google/uuid"
 )
 
@@ -52,8 +53,11 @@ func RunInteractiveShell(ctx context.Context, in io.ReadCloser, out, errOut io.W
 		WaterfallMode:     waterfallMode,
 		ShowStatusPerTurn: true,
 	})
-	if err := shell.Run(ctx, in, out, errOut); err != nil && errOut != nil {
-		fmt.Fprintf(errOut, "interactive shell failed: %v\n", err)
+	if err := shell.Run(ctx, in, out, errOut); err != nil {
+		if errOut != nil {
+			fmt.Fprintf(errOut, "interactive shell failed: %v\n", err)
+		}
+		return err
 	}
 	return nil
 }
@@ -93,8 +97,12 @@ func (s *InteractiveShell) Run(ctx context.Context, in io.ReadCloser, out, errOu
 			printShellStatus(out, s.cfg.Engine, sessionID)
 		}
 		line, err := rl.Readline()
-		if isReadTermination(err) {
+		if errors.Is(err, io.EOF) {
 			break
+		}
+		if errors.Is(err, readline.ErrInterrupt) {
+			fmt.Fprintln(out)
+			continue
 		}
 		if err != nil {
 			return fmt.Errorf("read failed: %w", err)
@@ -112,7 +120,10 @@ func (s *InteractiveShell) Run(ctx context.Context, in io.ReadCloser, out, errOu
 			continue
 		}
 
-		if err := RunStream(ctx, out, errOut, s.cfg.Engine, sessionID, input, s.cfg.TimeoutMs, s.cfg.Verbose, s.cfg.WaterfallMode); err != nil {
+		if err := RunStream(ctx, out, errOut, s.cfg.Engine, api.Request{
+			Prompt:    input,
+			SessionID: sessionID,
+		}, s.cfg.TimeoutMs, s.cfg.Verbose, s.cfg.WaterfallMode); err != nil {
 			fmt.Fprintf(errOut, "run failed: %v\n", err)
 		}
 	}
@@ -130,7 +141,7 @@ func isReadTermination(err error) bool {
 	if err == nil {
 		return false
 	}
-	return errors.Is(err, io.EOF) || errors.Is(err, readline.ErrInterrupt)
+	return errors.Is(err, io.EOF)
 }
 
 func handleCommand(input string, eng ReplEngine, sessionID *string, out io.Writer) (handled bool, quit bool) {

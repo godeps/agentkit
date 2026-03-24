@@ -17,7 +17,7 @@ func TestIsReadTermination(t *testing.T) {
 		want bool
 	}{
 		{name: "eof", err: io.EOF, want: true},
-		{name: "interrupt", err: readline.ErrInterrupt, want: true},
+		{name: "interrupt", err: readline.ErrInterrupt, want: false},
 		{name: "nil", err: nil, want: false},
 	}
 
@@ -32,7 +32,7 @@ func TestIsReadTermination(t *testing.T) {
 
 type fakeReplEngine struct{}
 
-func (f fakeReplEngine) RunStream(context.Context, string, string) (<-chan api.StreamEvent, error) {
+func (f fakeReplEngine) RunStream(context.Context, api.Request) (<-chan api.StreamEvent, error) {
 	panic("unexpected")
 }
 
@@ -64,12 +64,12 @@ func TestHandleCommandListsSkills(t *testing.T) {
 }
 
 type scriptedReplEngine struct {
-	calls []string
+	calls []api.Request
 	fail  bool
 }
 
-func (s *scriptedReplEngine) RunStream(_ context.Context, sessionID, prompt string) (<-chan api.StreamEvent, error) {
-	s.calls = append(s.calls, sessionID+":"+prompt)
+func (s *scriptedReplEngine) RunStream(_ context.Context, req api.Request) (<-chan api.StreamEvent, error) {
+	s.calls = append(s.calls, req)
 	if s.fail {
 		s.fail = false
 		return nil, io.ErrUnexpectedEOF
@@ -123,6 +123,9 @@ func TestInteractiveShellPrintsStatusAndContinuesAfterErrors(t *testing.T) {
 	if len(eng.calls) != 2 {
 		t.Fatalf("expected two prompts to be attempted, got %+v", eng.calls)
 	}
+	if eng.calls[0].SessionID != "sess-1" || eng.calls[0].Prompt != "hello" {
+		t.Fatalf("unexpected first call: %+v", eng.calls[0])
+	}
 	if errText := errOut.String(); errText == "" || !bytes.Contains([]byte(errText), []byte("run failed")) {
 		t.Fatalf("expected run failure on stderr, got %q", errText)
 	}
@@ -152,10 +155,16 @@ func TestInteractiveShellUnknownSlashInputFallsThrough(t *testing.T) {
 		t.Fatalf("run shell: %v", err)
 	}
 
-	if len(eng.calls) != 1 || eng.calls[0] != "sess-2:/unknown hi" {
+	if len(eng.calls) != 1 || eng.calls[0].SessionID != "sess-2" || eng.calls[0].Prompt != "/unknown hi" {
 		t.Fatalf("unexpected stream calls: %+v", eng.calls)
 	}
 	if got := out.String(); bytes.Contains([]byte(got), []byte("unknown command")) {
 		t.Fatalf("unexpected unknown command output: %q", got)
+	}
+}
+
+func TestIsReadTerminationIgnoresInterrupt(t *testing.T) {
+	if isReadTermination(readline.ErrInterrupt) {
+		t.Fatalf("interrupt should not terminate repl")
 	}
 }
