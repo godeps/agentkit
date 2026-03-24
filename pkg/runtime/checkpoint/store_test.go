@@ -2,6 +2,7 @@ package checkpoint
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/godeps/agentkit/pkg/artifact"
@@ -58,5 +59,34 @@ func TestCheckpointMemoryStoreDelete(t *testing.T) {
 	}
 	if _, err := store.Load(context.Background(), id); err == nil {
 		t.Fatal("expected missing checkpoint after delete")
+	}
+}
+
+func TestCheckpointFileStoreRoundTrip(t *testing.T) {
+	store, err := NewFileStore(filepath.Join(t.TempDir(), "checkpoints.json"))
+	if err != nil {
+		t.Fatalf("new file store: %v", err)
+	}
+	entry := Entry{
+		SessionID: "sess-file",
+		Remaining: &pipeline.Step{Name: "resume", Tool: "runner"},
+		Result:    pipeline.Result{Output: "paused"},
+	}
+
+	id, err := store.Save(context.Background(), entry)
+	if err != nil {
+		t.Fatalf("save checkpoint: %v", err)
+	}
+
+	reloaded, err := NewFileStore(store.path)
+	if err != nil {
+		t.Fatalf("reload file store: %v", err)
+	}
+	got, err := reloaded.Load(context.Background(), id)
+	if err != nil {
+		t.Fatalf("load checkpoint: %v", err)
+	}
+	if got.SessionID != "sess-file" || got.Result.Output != "paused" {
+		t.Fatalf("unexpected file-backed checkpoint: %+v", got)
 	}
 }

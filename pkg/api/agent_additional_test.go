@@ -9,8 +9,11 @@ import (
 	"time"
 
 	"github.com/godeps/agentkit/pkg/agent"
+	"github.com/godeps/agentkit/pkg/artifact"
 	"github.com/godeps/agentkit/pkg/message"
 	"github.com/godeps/agentkit/pkg/model"
+	"github.com/godeps/agentkit/pkg/pipeline"
+	runtimecache "github.com/godeps/agentkit/pkg/runtime/cache"
 	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
 	"github.com/godeps/agentkit/pkg/runtime/subagents"
@@ -90,6 +93,63 @@ func TestRunStreamRejectsEmptyPromptFallback(t *testing.T) {
 	rt := &Runtime{opts: Options{ProjectRoot: t.TempDir()}, mode: ModeContext{EntryPoint: EntryPointCLI}, histories: newHistoryStore(0)}
 	if _, err := rt.RunStream(context.Background(), Request{Prompt: "   "}); err == nil {
 		t.Fatal("expected empty prompt error")
+	}
+}
+
+func TestRunStreamPipelineEmitsTimelineEvents(t *testing.T) {
+	root := newClaudeProject(t)
+	rt, err := New(context.Background(), Options{
+		ProjectRoot: root,
+		Model:       &stubModel{},
+		CustomTools: []tool.Tool{&pipelineStepTool{outputs: map[string]*tool.ToolResult{
+			"generate": {
+				Output: "generated",
+				Artifacts: []artifact.ArtifactRef{
+					artifact.NewGeneratedRef("stream-out", artifact.ArtifactKindText),
+				},
+			},
+		}}},
+		CacheStore: runtimecache.NewMemoryStore(),
+	})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	ch, err := rt.RunStream(context.Background(), Request{
+		Pipeline: &pipeline.Step{
+			Name: "generate",
+			Tool: "pipeline_step",
+			Input: []artifact.ArtifactRef{
+				artifact.NewGeneratedRef("stream-in", artifact.ArtifactKindImage),
+			},
+			With: map[string]any{"prompt": "stream timeline"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run stream pipeline: %v", err)
+	}
+	var timelineKinds []string
+	for evt := range ch {
+		if evt.Type == EventTimeline && evt.Timeline != nil {
+			timelineKinds = append(timelineKinds, evt.Timeline.Kind)
+		}
+	}
+	if len(timelineKinds) == 0 {
+		t.Fatal("expected timeline events for pipeline stream")
+	}
+	mustSee := []string{TimelineInputArtifact, TimelineToolCall, TimelineToolResult, TimelineGeneratedArtifact}
+	for _, want := range mustSee {
+		found := false
+		for _, got := range timelineKinds {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected timeline kind %q in %+v", want, timelineKinds)
+		}
 	}
 }
 

@@ -635,7 +635,7 @@ func (rt *Runtime) RunStream(ctx context.Context, req Request) (<-chan StreamEve
 	if rt == nil {
 		return nil, ErrRuntimeClosed
 	}
-	if strings.TrimSpace(req.Prompt) == "" && len(req.ContentBlocks) == 0 {
+	if req.Pipeline == nil && strings.TrimSpace(req.ResumeFromCheckpoint) == "" && strings.TrimSpace(req.Prompt) == "" && len(req.ContentBlocks) == 0 {
 		return nil, errors.New("api: prompt is empty")
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
@@ -646,6 +646,34 @@ func (rt *Runtime) RunStream(ctx context.Context, req Request) (<-chan StreamEve
 
 	if err := rt.beginRun(); err != nil {
 		return nil, err
+	}
+
+	if req.Pipeline != nil || strings.TrimSpace(req.ResumeFromCheckpoint) != "" {
+		out := make(chan StreamEvent, 256)
+		go func() {
+			defer rt.endRun()
+			defer close(out)
+			if err := rt.sessionGate.Acquire(ctx, sessionID); err != nil {
+				isErr := true
+				out <- StreamEvent{Type: EventError, Output: ErrConcurrentExecution.Error(), IsError: &isErr}
+				return
+			}
+			defer rt.sessionGate.Release(sessionID)
+
+			out <- StreamEvent{Type: EventAgentStart, SessionID: sessionID}
+			resp, err := rt.runPipeline(ctx, req)
+			if err != nil {
+				isErr := true
+				out <- StreamEvent{Type: EventError, Output: err.Error(), IsError: &isErr, SessionID: sessionID}
+				return
+			}
+			for _, entry := range resp.Timeline {
+				entryCopy := entry
+				out <- StreamEvent{Type: EventTimeline, Timeline: &entryCopy, SessionID: sessionID}
+			}
+			out <- StreamEvent{Type: EventAgentStop, SessionID: sessionID}
+		}()
+		return out, nil
 	}
 
 	// 缓冲区增大以吸收前端延迟（逐字符渲染等）导致的背压，避免 progress emit 阻塞工具执行
