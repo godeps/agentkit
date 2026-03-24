@@ -27,6 +27,7 @@ const (
 	EventToolExecutionStart  = "tool_execution_start"
 	EventToolExecutionOutput = "tool_execution_output"
 	EventToolExecutionResult = "tool_execution_result"
+	EventTimeline            = "timeline"
 	EventError               = "error"
 )
 
@@ -41,6 +42,7 @@ type StreamEvent struct {
 	ContentBlock *ContentBlock `json:"content_block,omitempty"` // ContentBlock contains partial or full block data.
 	Delta        *Delta        `json:"delta,omitempty"`         // Delta carries incremental text/tool updates.
 	Usage        *Usage        `json:"usage,omitempty"`         // Usage records token consumption snapshots.
+	Timeline     *TimelineEntry `json:"timeline,omitempty"`     // Timeline carries structured multimodal trace entries.
 
 	// Agent-specific extensions.
 	ToolUseID string      `json:"tool_use_id,omitempty"`      // ToolUseID associates tool events with tool execution records.

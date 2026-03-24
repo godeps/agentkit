@@ -20,6 +20,7 @@ import (
 	"github.com/godeps/agentkit/pkg/middleware"
 	"github.com/godeps/agentkit/pkg/model"
 	"github.com/godeps/agentkit/pkg/pipeline"
+	runtimecache "github.com/godeps/agentkit/pkg/runtime/cache"
 	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/checkpoint"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
@@ -280,6 +281,8 @@ type Options struct {
 
 	// CheckpointStore persists resumable state for pipeline-backed runs.
 	CheckpointStore checkpoint.Store
+	// CacheStore persists step-level cached results for pipeline-backed runs.
+	CacheStore runtimecache.Store
 
 	// AutoCompact enables automatic context compaction for long sessions.
 	AutoCompact CompactConfig
@@ -328,6 +331,7 @@ type Response struct {
 	Mode           ModeContext
 	RequestID      string `json:"request_id,omitempty"` // UUID for distributed tracing
 	Result         *Result
+	Timeline       []TimelineEntry
 	SkillResults   []SkillExecution
 	CommandResults []CommandExecution
 	Subagent       *subagents.Result
