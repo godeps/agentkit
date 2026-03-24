@@ -18,6 +18,7 @@ import (
 	coremw "github.com/godeps/agentkit/pkg/core/middleware"
 	"github.com/godeps/agentkit/pkg/middleware"
 	"github.com/godeps/agentkit/pkg/model"
+	"github.com/godeps/agentkit/pkg/pipeline"
 	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
 	"github.com/godeps/agentkit/pkg/runtime/subagents"
@@ -298,6 +299,7 @@ func DefaultSubagentDefinitions() []subagents.Definition {
 type Request struct {
 	Prompt            string
 	ContentBlocks     []model.ContentBlock // Multimodal content; when non-empty, used alongside Prompt
+	Pipeline          *pipeline.Step
 	Mode              ModeContext
 	SessionID         string
 	RequestID         string    `json:"request_id,omitempty"` // Auto-generated UUID or user-provided
