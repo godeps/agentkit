@@ -18,6 +18,7 @@ import (
 	coremw "github.com/godeps/agentkit/pkg/core/middleware"
 	"github.com/godeps/agentkit/pkg/middleware"
 	"github.com/godeps/agentkit/pkg/model"
+	"github.com/godeps/agentkit/pkg/orchestration"
 	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
 	"github.com/godeps/agentkit/pkg/runtime/subagents"
@@ -312,6 +313,7 @@ type Request struct {
 	TargetSubagent    string
 	ToolWhitelist     []string
 	ForceSkills       []string
+	Plan              *orchestration.Node
 }
 
 // Response aggregates the final agent result together with metadata emitted
@@ -337,6 +339,7 @@ type Result struct {
 	StopReason string
 	Usage      model.Usage
 	ToolCalls  []model.ToolCall
+	Envelope   *orchestration.ResultEnvelope
 }
 
 // SkillExecution records individual skill invocations.
@@ -766,6 +769,10 @@ func (r Request) normalized(defaultMode ModeContext, fallbackSession string) Req
 	}
 	if len(req.ContentBlocks) > 0 {
 		req.ContentBlocks = append([]model.ContentBlock(nil), req.ContentBlocks...)
+	}
+	if req.Plan != nil {
+		plan := *req.Plan
+		req.Plan = &plan
 	}
 	if len(req.Channels) > 0 {
 		req.Channels = cloneStrings(req.Channels)

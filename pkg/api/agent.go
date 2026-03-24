@@ -20,6 +20,7 @@ import (
 	"github.com/godeps/agentkit/pkg/message"
 	"github.com/godeps/agentkit/pkg/middleware"
 	"github.com/godeps/agentkit/pkg/model"
+	"github.com/godeps/agentkit/pkg/orchestration"
 	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
 	"github.com/godeps/agentkit/pkg/runtime/subagents"
@@ -779,6 +780,9 @@ func convertRunResult(res runResult) *Result {
 		ToolCalls:  toolCalls,
 		Usage:      res.usage,
 		StopReason: res.reason,
+		Envelope: &orchestration.ResultEnvelope{
+			Text: res.output.Content,
+		},
 	}
 }
 
