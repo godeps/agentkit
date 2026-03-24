@@ -159,6 +159,10 @@ func (a *Agent) Run(ctx context.Context, c *Context) (*ModelOutput, error) {
 
 			res, err := a.tools.Execute(ctx, call, c)
 			if err != nil {
+				var interrupt interface{ InterruptMarker() bool }
+				if errors.As(err, &interrupt) && interrupt.InterruptMarker() {
+					return last, err
+				}
 				if res.Name == "" {
 					res.Name = call.Name
 				}

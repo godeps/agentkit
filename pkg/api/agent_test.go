@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	corehooks "github.com/godeps/agentkit/pkg/core/hooks"
 	"github.com/godeps/agentkit/pkg/message"
 	"github.com/godeps/agentkit/pkg/model"
+	"github.com/godeps/agentkit/pkg/orchestration"
 	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
 	"github.com/godeps/agentkit/pkg/security"
@@ -517,6 +519,117 @@ func TestRuntimeHookAskUsesPermissionHandler(t *testing.T) {
 	}
 	if toolImpl.calls != 1 {
 		t.Fatalf("expected tool execution, got %d", toolImpl.calls)
+	}
+}
+
+func TestRuntimeInterruptReturnsCheckpointID(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{responses: []*model.Response{
+		{Message: model.Message{Role: "assistant", Content: "alpha"}},
+	}}
+	rt, err := New(context.Background(), Options{ProjectRoot: root, Model: mdl})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	plan := orchestration.Sequence(
+		orchestration.Node{Kind: orchestration.KindTask, Name: "alpha", Metadata: map[string]any{"prompt": "alpha"}},
+		orchestration.Node{Kind: orchestration.KindTask, Name: "pause", Metadata: map[string]any{"pause": "ask_user"}},
+	)
+
+	resp, err := rt.Run(context.Background(), Request{Prompt: "ignored", Plan: &plan})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if resp == nil || resp.Result == nil {
+		t.Fatalf("expected response, got %+v", resp)
+	}
+	if !resp.Result.Interrupted || strings.TrimSpace(resp.Result.CheckpointID) == "" {
+		t.Fatalf("expected interrupt checkpoint, got %+v", resp.Result)
+	}
+}
+
+func TestRuntimeResumeByCheckpointID(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{responses: []*model.Response{
+		{Message: model.Message{Role: "assistant", Content: "alpha"}},
+		{Message: model.Message{Role: "assistant", Content: "beta"}},
+	}}
+	rt, err := New(context.Background(), Options{ProjectRoot: root, Model: mdl})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	plan := orchestration.Sequence(
+		orchestration.Node{Kind: orchestration.KindTask, Name: "alpha", Metadata: map[string]any{"prompt": "alpha"}},
+		orchestration.Node{Kind: orchestration.KindTask, Name: "pause", Metadata: map[string]any{"pause": "ask_user"}},
+		orchestration.Node{Kind: orchestration.KindTask, Name: "beta", Metadata: map[string]any{"prompt": "beta"}},
+	)
+
+	first, err := rt.Run(context.Background(), Request{Prompt: "ignored", Plan: &plan})
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	resumed, err := rt.Resume(context.Background(), first.Result.CheckpointID)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if resumed == nil || resumed.Result == nil || resumed.Result.Interrupted {
+		t.Fatalf("expected resumed completion, got %+v", resumed)
+	}
+	if resumed.Result.Output != "alpha\nbeta" {
+		t.Fatalf("unexpected resumed output: %+v", resumed.Result)
+	}
+}
+
+func TestRuntimeApprovalResumeRoundTrip(t *testing.T) {
+	root := newClaudeProjectWithSettings(t, `{"permissions":{"ask":["echo"]},"sandbox":{"enabled":true}}`)
+	mdl := &stubModel{responses: []*model.Response{
+		{Message: model.Message{Role: "assistant", ToolCalls: []model.ToolCall{{ID: "1", Name: "echo", Arguments: map[string]any{"text": "hi"}}}}},
+		{Message: model.Message{Role: "assistant", Content: "done"}},
+	}}
+	queue, err := security.NewApprovalQueue(filepath.Join(t.TempDir(), "approvals.json"))
+	if err != nil {
+		t.Fatalf("approval queue: %v", err)
+	}
+	toolImpl := &echoTool{}
+	rt, err := New(context.Background(), Options{
+		ProjectRoot:   root,
+		Model:         mdl,
+		Tools:         []tool.Tool{toolImpl},
+		ApprovalQueue: queue,
+	})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	first, err := rt.Run(context.Background(), Request{Prompt: "call tool", SessionID: "sess-approval", ToolWhitelist: []string{"echo"}})
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if first == nil || first.Result == nil || !first.Result.Interrupted {
+		t.Fatalf("expected approval interrupt, got %+v", first)
+	}
+	pending := queue.ListPending()
+	if len(pending) != 1 {
+		t.Fatalf("expected one pending approval, got %+v", pending)
+	}
+	if _, err := queue.Approve(pending[0].ID, "tester", time.Hour); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	resumed, err := rt.Resume(context.Background(), first.Result.CheckpointID)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if resumed.Result.Output != "done" {
+		t.Fatalf("unexpected resumed output: %+v", resumed.Result)
+	}
+	if toolImpl.calls != 1 {
+		t.Fatalf("expected tool execution after resume, got %d", toolImpl.calls)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"github.com/godeps/agentkit/pkg/middleware"
 	"github.com/godeps/agentkit/pkg/model"
 	"github.com/godeps/agentkit/pkg/orchestration"
+	"github.com/godeps/agentkit/pkg/runtime/checkpoint"
 	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
 	"github.com/godeps/agentkit/pkg/runtime/subagents"
@@ -278,7 +279,8 @@ type Options struct {
 	// ApprovalWhitelistTTL controls session whitelist duration for approvals.
 	ApprovalWhitelistTTL time.Duration
 	// ApprovalWait blocks tool execution until a pending approval is resolved.
-	ApprovalWait bool
+	ApprovalWait    bool
+	CheckpointStore checkpoint.Store
 
 	// AutoCompact enables automatic context compaction for long sessions.
 	AutoCompact CompactConfig
@@ -339,11 +341,13 @@ type Response struct {
 
 // Result represents the agent execution result.
 type Result struct {
-	Output     string
-	StopReason string
-	Usage      model.Usage
-	ToolCalls  []model.ToolCall
-	Envelope   *orchestration.ResultEnvelope
+	Output       string
+	StopReason   string
+	Usage        model.Usage
+	ToolCalls    []model.ToolCall
+	Envelope     *orchestration.ResultEnvelope
+	Interrupted  bool
+	CheckpointID string
 }
 
 // SkillExecution records individual skill invocations.
