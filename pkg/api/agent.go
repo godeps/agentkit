@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/godeps/agentkit/pkg/agent"
+	"github.com/godeps/agentkit/pkg/artifact"
 	"github.com/godeps/agentkit/pkg/config"
 	coreevents "github.com/godeps/agentkit/pkg/core/events"
 	corehooks "github.com/godeps/agentkit/pkg/core/hooks"
@@ -1359,7 +1360,7 @@ func (t *runtimeToolExecutor) isAllowed(ctx context.Context, name string) bool {
 }
 
 func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, _ *agent.Context) (agent.ToolResult, error) {
-	appendToolResult := func(content string, blocks []model.ContentBlock) {
+	appendToolResult := func(content string, blocks []model.ContentBlock, artifacts []artifact.ArtifactRef) {
 		if t.history != nil {
 			t.history.Append(message.Message{
 				Role: "tool",
@@ -1369,17 +1370,18 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 					Result: content,
 				}},
 			})
-			if len(blocks) > 0 {
+			if len(blocks) > 0 || len(artifacts) > 0 {
 				t.history.Append(message.Message{
 					Role:          "user",
 					Content:       fmt.Sprintf("[multimodal content from tool: %s]", call.Name),
 					ContentBlocks: convertAPIContentBlocks(blocks),
+					Artifacts:     append([]artifact.ArtifactRef(nil), artifacts...),
 				})
 			}
 		}
 	}
 	appendEarlyError := func(err error) error {
-		appendToolResult(fmt.Sprintf("Tool execution failed: %v", err), nil)
+		appendToolResult(fmt.Sprintf("Tool execution failed: %v", err), nil, nil)
 		return err
 	}
 
@@ -1455,7 +1457,7 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 	if preErr != nil {
 		// Hook denied execution - still need to add tool_result to history
 		errContent := fmt.Sprintf(`{"error":%q}`, preErr.Error())
-		appendToolResult(errContent, nil)
+		appendToolResult(errContent, nil, nil)
 		return agent.ToolResult{Name: call.Name, Output: errContent, Metadata: map[string]any{"error": preErr.Error()}}, preErr
 	}
 	if params != nil {
@@ -1494,16 +1496,30 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 	meta := map[string]any{}
 	content := ""
 	var blocks []model.ContentBlock
+	var artifacts []artifact.ArtifactRef
 	if result != nil && result.Result != nil {
 		toolResult.Output = result.Result.Output
 		meta["data"] = result.Result.Data
 		if result.Result.OutputRef != nil {
 			meta["output_ref"] = result.Result.OutputRef
 		}
+		if result.Result.Summary != "" {
+			meta["summary"] = result.Result.Summary
+		}
+		if result.Result.Structured != nil {
+			meta["structured"] = result.Result.Structured
+		}
+		if result.Result.Preview != nil {
+			meta["preview"] = result.Result.Preview
+		}
 		content = result.Result.Output
 		if len(result.Result.ContentBlocks) > 0 {
 			blocks = append([]model.ContentBlock(nil), result.Result.ContentBlocks...)
 			meta["content_blocks"] = blocks
+		}
+		if len(result.Result.Artifacts) > 0 {
+			artifacts = append([]artifact.ArtifactRef(nil), result.Result.Artifacts...)
+			meta["artifacts"] = artifacts
 		}
 	}
 	if err != nil {
@@ -1516,11 +1532,11 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 
 	if hookErr := t.hooks.PostToolUse(ctx, coreToolResultPayload(call, result, err)); hookErr != nil && err == nil {
 		// Hook failed - still need to add tool_result to history
-		appendToolResult(content, blocks)
+		appendToolResult(content, blocks, artifacts)
 		return toolResult, hookErr
 	}
 
-	appendToolResult(content, blocks)
+	appendToolResult(content, blocks, artifacts)
 	return toolResult, err
 }
 

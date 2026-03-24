@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/godeps/agentkit/pkg/agent"
+	"github.com/godeps/agentkit/pkg/artifact"
 	"github.com/godeps/agentkit/pkg/config"
 	coreevents "github.com/godeps/agentkit/pkg/core/events"
 	corehooks "github.com/godeps/agentkit/pkg/core/hooks"
@@ -823,6 +824,46 @@ func TestRuntimeToolExecutor_AppendsToolContentBlocksToHistory(t *testing.T) {
 	if msgs[1].ContentBlocks[0].MediaType != "image/png" || msgs[1].ContentBlocks[0].Data != "aGVsbG8=" {
 		t.Fatalf("unexpected content block payload: %+v", msgs[1].ContentBlocks[0])
 	}
+	if len(msgs[1].Artifacts) != 1 || msgs[1].Artifacts[0].ArtifactID != "art_image" {
+		t.Fatalf("expected artifact refs to be appended to history, got %+v", msgs[1].Artifacts)
+	}
+}
+
+func TestRuntimeToolExecutor_PreservesMultimodalToolResultMetadata(t *testing.T) {
+	reg := tool.NewRegistry()
+	impl := &multimodalTool{}
+	if err := reg.Register(impl); err != nil {
+		t.Fatalf("register tool: %v", err)
+	}
+	exec := tool.NewExecutor(reg, nil)
+	rtExec := &runtimeToolExecutor{
+		executor: exec,
+		hooks:    &runtimeHookAdapter{},
+		host:     "localhost",
+	}
+
+	call := agent.ToolCall{ID: "c1", Name: impl.Name(), Input: map[string]any{}}
+	res, err := rtExec.Execute(context.Background(), call, agent.NewContext())
+	if err != nil {
+		t.Fatalf("execute tool: %v", err)
+	}
+
+	if res.Output != "image loaded" {
+		t.Fatalf("unexpected output: %q", res.Output)
+	}
+	if got := res.Metadata["summary"]; got != "generated image preview" {
+		t.Fatalf("expected summary metadata, got %+v", got)
+	}
+	if got := res.Metadata["structured"]; got == nil {
+		t.Fatalf("expected structured metadata, got %+v", res.Metadata)
+	}
+	if got := res.Metadata["preview"]; got == nil {
+		t.Fatalf("expected preview metadata, got %+v", res.Metadata)
+	}
+	arts, ok := res.Metadata["artifacts"].([]artifact.ArtifactRef)
+	if !ok || len(arts) != 1 || arts[0].ArtifactID != "art_image" {
+		t.Fatalf("expected artifact metadata, got %+v", res.Metadata["artifacts"])
+	}
 }
 
 func TestNewRejectsDisallowedMCPServer(t *testing.T) {
@@ -1088,10 +1129,22 @@ func (m *multimodalTool) Execute(context.Context, map[string]interface{}) (*tool
 	return &tool.ToolResult{
 		Success: true,
 		Output:  "image loaded",
+		Summary: "generated image preview",
+		Structured: map[string]any{
+			"dominant_color": "blue",
+		},
+		Artifacts: []artifact.ArtifactRef{
+			artifact.NewGeneratedRef("art_image", artifact.ArtifactKindImage),
+		},
 		ContentBlocks: []model.ContentBlock{{
 			Type:      model.ContentBlockImage,
 			MediaType: "image/png",
 			Data:      "aGVsbG8=",
 		}},
+		Preview: &tool.Preview{
+			Title:     "Preview image",
+			Summary:   "generated image preview",
+			MediaType: "image/png",
+		},
 	}, nil
 }
