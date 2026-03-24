@@ -11,6 +11,7 @@ import (
 	"github.com/godeps/agentkit/pkg/agent"
 	"github.com/godeps/agentkit/pkg/message"
 	"github.com/godeps/agentkit/pkg/model"
+	"github.com/godeps/agentkit/pkg/orchestration"
 	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
 	"github.com/godeps/agentkit/pkg/runtime/subagents"
@@ -167,6 +168,49 @@ func TestExecuteCommandsUnknownCommand(t *testing.T) {
 	_, _, err := rt.executeCommands(context.Background(), "/unknown", &Request{Prompt: "/unknown"})
 	if !errors.Is(err, commands.ErrUnknownCommand) {
 		t.Fatalf("expected unknown command error, got %v", err)
+	}
+}
+
+func TestRuntimeRunsOrchestrationPlan(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{responses: []*model.Response{
+		{Message: model.Message{Role: "assistant", Content: "alpha"}},
+		{Message: model.Message{Role: "assistant", Content: "beta"}},
+	}}
+	rt, err := New(context.Background(), Options{ProjectRoot: root, Model: mdl})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	defer rt.Close()
+
+	plan := orchestration.Sequence(
+		orchestration.Node{Kind: orchestration.KindTask, Name: "first", Metadata: map[string]any{"prompt": "first prompt"}},
+		orchestration.Node{Kind: orchestration.KindTask, Name: "second", Metadata: map[string]any{"prompt": "second prompt"}},
+	)
+
+	resp, err := rt.Run(context.Background(), Request{
+		Prompt: "outer prompt",
+		Plan:   &plan,
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if resp == nil || resp.Result == nil {
+		t.Fatalf("expected orchestration response, got %+v", resp)
+	}
+	if resp.Result.Output != "alpha\nbeta" {
+		t.Fatalf("unexpected output: %+v", resp.Result)
+	}
+	if resp.Result.Envelope == nil || resp.Result.Envelope.Text != "alpha\nbeta" {
+		t.Fatalf("unexpected envelope: %+v", resp.Result.Envelope)
+	}
+	if len(mdl.requests) != 2 {
+		t.Fatalf("expected 2 model calls, got %d", len(mdl.requests))
+	}
+	last0 := mdl.requests[0].Messages[len(mdl.requests[0].Messages)-1].Content
+	last1 := mdl.requests[1].Messages[len(mdl.requests[1].Messages)-1].Content
+	if last0 != "first prompt" || last1 != "second prompt" {
+		t.Fatalf("unexpected prompts: %q / %q", last0, last1)
 	}
 }
 

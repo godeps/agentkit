@@ -771,7 +771,7 @@ func (r Request) normalized(defaultMode ModeContext, fallbackSession string) Req
 		req.ContentBlocks = append([]model.ContentBlock(nil), req.ContentBlocks...)
 	}
 	if req.Plan != nil {
-		plan := *req.Plan
+		plan := cloneOrchestrationNode(*req.Plan)
 		req.Plan = &plan
 	}
 	if len(req.Channels) > 0 {
@@ -819,6 +819,67 @@ func cloneStrings(in []string) []string {
 	out := append([]string(nil), in...)
 	slices.Sort(out)
 	return slices.Compact(out)
+}
+
+func cloneOrchestrationNode(in orchestration.Node) orchestration.Node {
+	out := in
+	if len(in.Nodes) > 0 {
+		out.Nodes = make([]orchestration.Node, len(in.Nodes))
+		for i, node := range in.Nodes {
+			out.Nodes[i] = cloneOrchestrationNode(node)
+		}
+	}
+	if len(in.Branches) > 0 {
+		out.Branches = make([]orchestration.Branch, len(in.Branches))
+		for i, branch := range in.Branches {
+			out.Branches[i] = orchestration.Branch{
+				Name: branch.Name,
+				When: branch.When,
+				Node: cloneOrchestrationNode(branch.Node),
+			}
+		}
+	}
+	if in.Default != nil {
+		def := cloneOrchestrationNode(*in.Default)
+		out.Default = &def
+	}
+	if in.Retry != nil {
+		out.Retry = &orchestration.RetrySpec{
+			MaxAttempts: in.Retry.MaxAttempts,
+			Backoff:     in.Retry.Backoff,
+		}
+	}
+	if in.Result != nil {
+		out.Result = cloneOrchestrationEnvelope(in.Result)
+	}
+	if len(in.Metadata) > 0 {
+		out.Metadata = maps.Clone(in.Metadata)
+	}
+	return out
+}
+
+func cloneOrchestrationEnvelope(in *orchestration.ResultEnvelope) *orchestration.ResultEnvelope {
+	if in == nil {
+		return nil
+	}
+	out := &orchestration.ResultEnvelope{
+		Text: in.Text,
+	}
+	if len(in.Structured) > 0 {
+		out.Structured = maps.Clone(in.Structured)
+	}
+	if len(in.Branches) > 0 {
+		out.Branches = make(map[string]orchestration.ResultEnvelope, len(in.Branches))
+		for k, v := range in.Branches {
+			out.Branches[k] = v
+		}
+	} else if in.Branches != nil {
+		out.Branches = map[string]orchestration.ResultEnvelope{}
+	}
+	if len(in.Metadata) > 0 {
+		out.Metadata = maps.Clone(in.Metadata)
+	}
+	return out
 }
 
 // WithModelPool configures a pool of models indexed by tier.

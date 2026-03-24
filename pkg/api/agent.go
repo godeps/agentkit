@@ -484,9 +484,10 @@ type preparedRun struct {
 }
 
 type runResult struct {
-	output *agent.ModelOutput
-	usage  model.Usage
-	reason string
+	output   *agent.ModelOutput
+	envelope *orchestration.ResultEnvelope
+	usage    model.Usage
+	reason   string
 }
 
 func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error) {
@@ -583,6 +584,9 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 }
 
 func (rt *Runtime) runAgent(prep preparedRun) (runResult, error) {
+	if prep.normalized.Plan != nil {
+		return rt.runPlan(prep)
+	}
 	return rt.runAgentWithMiddleware(prep)
 }
 
@@ -676,6 +680,7 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 	}
 	result := runResult{output: out, usage: modelAdapter.usage, reason: modelAdapter.stopReason}
 	result = rt.applyOutputSchema(prep.ctx, selectedModel, prep.history, modelAdapter.outputSchema, modelAdapter.outputMode, result)
+	result.envelope = resultEnvelopeFromRunResult(result)
 	if rt.tokens != nil && rt.tokens.IsEnabled() {
 		stats := tokenStatsFromUsage(result.usage, "", prep.normalized.SessionID, prep.normalized.RequestID)
 		rt.tokens.Record(stats)
@@ -768,22 +773,118 @@ func (rt *Runtime) sandboxReport() SandboxReport {
 }
 
 func convertRunResult(res runResult) *Result {
-	if res.output == nil {
+	if res.output == nil && res.envelope == nil {
 		return nil
 	}
-	toolCalls := make([]model.ToolCall, len(res.output.ToolCalls))
-	for i, call := range res.output.ToolCalls {
-		toolCalls[i] = model.ToolCall{Name: call.Name, Arguments: call.Input}
+	var output string
+	var toolCalls []model.ToolCall
+	if res.output != nil {
+		output = res.output.Content
+		toolCalls = make([]model.ToolCall, len(res.output.ToolCalls))
+		for i, call := range res.output.ToolCalls {
+			toolCalls[i] = model.ToolCall{Name: call.Name, Arguments: call.Input}
+		}
+	} else if res.envelope != nil {
+		output = res.envelope.Text
 	}
 	return &Result{
-		Output:     res.output.Content,
+		Output:     output,
 		ToolCalls:  toolCalls,
 		Usage:      res.usage,
 		StopReason: res.reason,
-		Envelope: &orchestration.ResultEnvelope{
-			Text: res.output.Content,
-		},
+		Envelope:   cloneOrchestrationEnvelope(res.envelope),
 	}
+}
+
+func resultEnvelopeFromRunResult(res runResult) *orchestration.ResultEnvelope {
+	if res.envelope != nil {
+		return cloneOrchestrationEnvelope(res.envelope)
+	}
+	if res.output == nil {
+		return nil
+	}
+	return &orchestration.ResultEnvelope{Text: res.output.Content}
+}
+
+func (rt *Runtime) runPlan(prep preparedRun) (runResult, error) {
+	var mu sync.Mutex
+	var usage model.Usage
+	var reason string
+	exec := orchestration.NewExecutor(func(ctx context.Context, node orchestration.Node, input orchestration.Input) (*orchestration.ResultEnvelope, error) {
+		child := prep.cloneForPlanNode(node)
+		child.ctx = ctx
+		if len(input.Metadata) > 0 {
+			child.normalized.Metadata = maps.Clone(input.Metadata)
+		}
+		res, err := rt.runAgentWithMiddleware(child)
+		if err != nil {
+			return nil, err
+		}
+		mu.Lock()
+		usage = mergeUsage(usage, res.usage)
+		if strings.TrimSpace(res.reason) != "" {
+			reason = res.reason
+		}
+		mu.Unlock()
+		return resultEnvelopeFromRunResult(res), nil
+	})
+
+	var plan orchestration.Node
+	if prep.normalized.Plan != nil {
+		plan = *prep.normalized.Plan
+	}
+	env, err := exec.Execute(prep.ctx, plan, orchestration.Input{Metadata: maps.Clone(prep.normalized.Metadata)})
+	if err != nil {
+		return runResult{}, err
+	}
+	return runResult{
+		envelope: env,
+		reason:   reason,
+		usage:    usage,
+	}, nil
+}
+
+func (prep preparedRun) cloneForPlanNode(node orchestration.Node) preparedRun {
+	cloned := prep
+	cloned.prompt = planNodePrompt(node, prep.prompt)
+	cloned.contentBlocks = nil
+	cloned.history = cloneHistory(prep.history)
+	cloned.recorder = defaultHookRecorder()
+	cloned.normalized = prep.normalized
+	cloned.normalized.Plan = nil
+	cloned.normalized.Prompt = cloned.prompt
+	if len(node.Metadata) > 0 {
+		cloned.normalized.Metadata = maps.Clone(node.Metadata)
+	}
+	return cloned
+}
+
+func cloneHistory(src *message.History) *message.History {
+	if src == nil {
+		return message.NewHistory()
+	}
+	out := message.NewHistory()
+	out.Replace(src.All())
+	return out
+}
+
+func planNodePrompt(node orchestration.Node, fallback string) string {
+	if text, ok := node.Metadata["prompt"].(string); ok && strings.TrimSpace(text) != "" {
+		return strings.TrimSpace(text)
+	}
+	if strings.TrimSpace(node.Name) != "" {
+		return strings.TrimSpace(node.Name)
+	}
+	return fallback
+}
+
+func mergeUsage(dst, src model.Usage) model.Usage {
+	dst.InputTokens += src.InputTokens
+	dst.OutputTokens += src.OutputTokens
+	dst.TotalTokens += src.TotalTokens
+	dst.CacheReadTokens += src.CacheReadTokens
+	dst.CacheCreationTokens += src.CacheCreationTokens
+	return dst
 }
 
 func (rt *Runtime) executeCommands(ctx context.Context, prompt string, req *Request) ([]CommandExecution, string, error) {
