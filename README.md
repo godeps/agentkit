@@ -803,6 +803,7 @@ customMiddleware := middleware.Funcs{
 
 ## Documentation
 
+- [Current Architecture (zh-CN)](docs/current-architecture.zh-CN.md) - Current implementation-oriented architecture and core technical details
 - [Architecture](docs/architecture.md) - Detailed architecture analysis
 - [Getting Started](docs/getting-started.md) - Step-by-step tutorial
 - [API Reference](docs/api-reference.md) - API documentation
