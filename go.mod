@@ -7,7 +7,7 @@ require (
 	github.com/chzyer/readline v1.5.1
 	github.com/coder/acp-go-sdk v0.6.4-0.20260227160919-584abe6abe22
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/godeps/govm v0.1.3
+	github.com/godeps/govm v0.1.4-0.20260320035657-7ab34655fe79
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.1.0
 	github.com/openai/openai-go v1.12.0
