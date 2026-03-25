@@ -45,7 +45,19 @@ go run ./cmd/cli --prompt "分析仓库" --stream --stream-format rendered
 
 # 交互式 REPL
 go run ./cmd/cli --repl
+
+# 恢复一个中断后的 checkpoint
+go run ./cmd/cli --resume cp-123
+
+# 打印本次执行的统一 timeline
+go run ./cmd/cli --prompt "分析仓库" --print-timeline
 ```
+
+交互式 REPL 还支持：
+
+- `/resume <checkpoint-id>`：继续执行一个中断后的运行
+- `/checkpoint`：打印最近一次记录到的 checkpoint id
+- `/timeline`：查看最近一次运行的 timeline
 
 完整 CLI 手册见 [docs/cli.zh-CN.md](docs/cli.zh-CN.md)。
 

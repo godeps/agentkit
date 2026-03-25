@@ -26,6 +26,12 @@ Run one prompt and exit:
 go run ./cmd/cli --prompt "summarize this repository"
 ```
 
+Resume a previously interrupted run:
+
+```bash
+go run ./cmd/cli --resume cp-123
+```
+
 Pass input through stdin:
 
 ```bash
@@ -106,6 +112,9 @@ Built-in slash commands:
 - `/new`
 - `/session`
 - `/model`
+- `/checkpoint`
+- `/timeline`
+- `/resume <checkpoint-id>`
 - `/help`
 - `/quit`
 
@@ -114,6 +123,9 @@ Notes:
 - `/new` starts a fresh session id
 - `/quit`, `/exit`, or `/q` exits the shell
 - command failures in one turn do not terminate the whole shell
+- `/resume <checkpoint-id>` resumes a persisted checkpoint via the runtime
+- `/checkpoint` prints the latest checkpoint remembered by the shell
+- `/timeline` prints the latest response timeline remembered by the shell
 
 ## Non-Interactive Execution
 
@@ -138,6 +150,25 @@ go run ./cmd/cli --prompt "analyze this" --tag source=manual --tag dryrun
 `--tag key=value` sets a string value.  
 `--tag key` is treated as `key=true`.
 
+Resume a previously interrupted execution:
+
+```bash
+go run ./cmd/cli --resume cp-123
+```
+
+Print the unified response timeline after a one-shot run:
+
+```bash
+go run ./cmd/cli --prompt "inspect repo" --print-timeline
+go run ./cmd/cli --resume cp-123 --print-timeline
+```
+
+If a one-shot run returns an interrupt checkpoint, the CLI prints:
+
+- `interrupted: true`
+- `checkpoint_id: <id>`
+- `next: agentkit --resume <id>`
+
 ## Streaming Output
 
 Enable streaming:
@@ -161,6 +192,10 @@ go run ./cmd/cli --prompt "inspect repo" --stream --stream-format rendered
 Use `--verbose` to print extra event diagnostics during streaming.
 
 Use `--waterfall off|summary|full` to control rendered waterfall output.
+
+Important limitation:
+
+- `--resume` cannot be combined with `--stream`
 
 ## ACP Mode
 

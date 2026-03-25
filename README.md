@@ -65,7 +65,19 @@ go run ./cmd/cli --prompt "inspect repo" --stream --stream-format rendered
 
 # Interactive REPL
 go run ./cmd/cli --repl
+
+# Resume a checkpointed run
+go run ./cmd/cli --resume cp-123
+
+# Print the unified debug timeline for a completed run
+go run ./cmd/cli --prompt "inspect repo" --print-timeline
 ```
+
+Interactive REPL commands now also include:
+
+- `/resume <checkpoint-id>` to continue an interrupted run
+- `/checkpoint` to print the latest remembered checkpoint id
+- `/timeline` to show the most recent run timeline
 
 ### CLI Skill Invocation
 

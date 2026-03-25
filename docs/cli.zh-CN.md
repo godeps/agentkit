@@ -26,6 +26,12 @@ go run ./cmd/cli
 go run ./cmd/cli --prompt "总结这个仓库"
 ```
 
+恢复一个之前中断的运行：
+
+```bash
+go run ./cmd/cli --resume cp-123
+```
+
 通过 stdin 传入输入：
 
 ```bash
@@ -106,6 +112,9 @@ go run ./cmd/cli
 - `/new`
 - `/session`
 - `/model`
+- `/checkpoint`
+- `/timeline`
+- `/resume <checkpoint-id>`
 - `/help`
 - `/quit`
 
@@ -114,6 +123,9 @@ go run ./cmd/cli
 - `/new` 会生成一个新的 session id
 - `/quit`、`/exit`、`/q` 都会退出 shell
 - 单轮执行失败不会直接结束整个 shell
+- `/resume <checkpoint-id>` 会通过 runtime 恢复一个持久化 checkpoint
+- `/checkpoint` 会打印 shell 当前记住的最近 checkpoint
+- `/timeline` 会打印 shell 当前记住的最近一次响应 timeline
 
 ## 非交互执行
 
@@ -138,6 +150,25 @@ go run ./cmd/cli --prompt "分析这个仓库" --tag source=manual --tag dryrun
 `--tag key=value` 会设置字符串值。  
 `--tag key` 会被视为 `key=true`。
 
+恢复一个之前中断的执行：
+
+```bash
+go run ./cmd/cli --resume cp-123
+```
+
+在单次运行后打印统一 timeline：
+
+```bash
+go run ./cmd/cli --prompt "检查仓库" --print-timeline
+go run ./cmd/cli --resume cp-123 --print-timeline
+```
+
+如果单次执行返回了中断 checkpoint，CLI 会打印：
+
+- `interrupted: true`
+- `checkpoint_id: <id>`
+- `next: agentkit --resume <id>`
+
 ## 流式输出
 
 启用流式输出：
@@ -161,6 +192,10 @@ go run ./cmd/cli --prompt "检查仓库" --stream --stream-format rendered
 `--verbose` 会输出额外的流式事件诊断信息。
 
 `--waterfall off|summary|full` 用于控制渲染流的 waterfall 输出级别。
+
+限制说明：
+
+- `--resume` 不能和 `--stream` 同时使用
 
 ## ACP 模式
 
