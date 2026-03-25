@@ -221,6 +221,92 @@ func TestRunPrintTimelineForNormalRun(t *testing.T) {
 	}
 }
 
+func TestRunInterruptedPrintsResumeHint(t *testing.T) {
+	origFactory := runtimeFactory
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+	})
+	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
+		return &fakeRuntime{
+			runFn: func(context.Context, api.Request) (*api.Response, error) {
+				return &api.Response{
+					Mode: api.ModeContext{EntryPoint: api.EntryPointCLI},
+					Result: &api.Result{
+						Output:       "paused",
+						Interrupted:  true,
+						CheckpointID: "cp-7",
+					},
+				}, nil
+			},
+		}, nil
+	}
+
+	var stdout bytes.Buffer
+	if err := run([]string{"--prompt", "hi"}, &stdout, io.Discard); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := stdout.String()
+	for _, sub := range []string{"interrupted: true", "checkpoint_id: cp-7", "next: agentkit --resume cp-7"} {
+		if !strings.Contains(got, sub) {
+			t.Fatalf("missing %q in output: %s", sub, got)
+		}
+	}
+}
+
+func TestRunResumeErrorIncludesCheckpointID(t *testing.T) {
+	origFactory := runtimeFactory
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+	})
+	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
+		return &fakeRuntime{
+			resumeFn: func(_ context.Context, checkpointID string) (*api.Response, error) {
+				return nil, errors.New("missing checkpoint")
+			},
+		}, nil
+	}
+
+	err := run([]string{"--resume", "cp-404"}, io.Discard, io.Discard)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if got := err.Error(); !strings.Contains(got, "resume failed for checkpoint cp-404") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunPrintTimelineUsesIndexedLines(t *testing.T) {
+	origFactory := runtimeFactory
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+	})
+	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
+		return &fakeRuntime{
+			runFn: func(context.Context, api.Request) (*api.Response, error) {
+				return &api.Response{
+					Mode:   api.ModeContext{EntryPoint: api.EntryPointCLI},
+					Result: &api.Result{Output: "ok"},
+					Timeline: []api.TimelineEntry{
+						{Kind: api.TimelineKindResume, Source: api.TimelineEventResume},
+						{Kind: api.TimelineKindToolResult, Source: api.EventToolExecutionResult},
+					},
+				}, nil
+			},
+		}, nil
+	}
+
+	var stdout bytes.Buffer
+	if err := run([]string{"--prompt", "hi", "--print-timeline"}, &stdout, io.Discard); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := stdout.String()
+	for _, sub := range []string{"timeline:", "1. resume source=TimelineResume", "2. tool_result source=tool_execution_result"} {
+		if !strings.Contains(got, sub) {
+			t.Fatalf("missing %q in output: %s", sub, got)
+		}
+	}
+}
+
 func TestRunStreamUsesClikitRendererWhenEnabled(t *testing.T) {
 	origFactory := runtimeFactory
 	origRunStream := clikitRunStream

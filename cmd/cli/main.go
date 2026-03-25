@@ -233,7 +233,7 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	if resumeID != "" {
 		resp, err = runtime.Resume(ctx, resumeID)
 		if err != nil {
-			return err
+			return fmt.Errorf("resume failed for checkpoint %s: %w", resumeID, err)
 		}
 	} else {
 		resp, err = runtime.Run(ctx, req)
@@ -402,6 +402,9 @@ func printResponse(resp *api.Response, out io.Writer, printTimeline bool) {
 		}
 		if checkpointID := strings.TrimSpace(resp.Result.CheckpointID); checkpointID != "" {
 			fmt.Fprintf(out, "checkpoint_id: %s\n", checkpointID)
+			if resp.Result.Interrupted {
+				fmt.Fprintf(out, "next: agentkit --resume %s\n", checkpointID)
+			}
 		}
 		fmt.Fprintf(out, "output:\n%s\n", resp.Result.Output)
 	}
@@ -416,15 +419,15 @@ func printTimelineEntries(out io.Writer, timeline []api.TimelineEntry) {
 	}
 	fmt.Fprintln(out, "timeline:")
 	if len(timeline) == 0 {
-		fmt.Fprintln(out, "- none")
+		fmt.Fprintln(out, "0. none")
 		return
 	}
-	for _, entry := range timeline {
+	for i, entry := range timeline {
 		if strings.TrimSpace(entry.Source) != "" {
-			fmt.Fprintf(out, "- %s source=%s\n", entry.Kind, entry.Source)
+			fmt.Fprintf(out, "%d. %s source=%s\n", i+1, entry.Kind, entry.Source)
 			continue
 		}
-		fmt.Fprintf(out, "- %s\n", entry.Kind)
+		fmt.Fprintf(out, "%d. %s\n", i+1, entry.Kind)
 	}
 }
 
