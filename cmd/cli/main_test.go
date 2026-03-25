@@ -275,6 +275,16 @@ func TestRunResumeErrorIncludesCheckpointID(t *testing.T) {
 	}
 }
 
+func TestRunRejectsResumeStreamCombination(t *testing.T) {
+	err := run([]string{"--resume", "cp-1", "--stream"}, io.Discard, io.Discard)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if got := err.Error(); !strings.Contains(got, "--resume cannot be combined with --stream") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunPrintTimelineUsesIndexedLines(t *testing.T) {
 	origFactory := runtimeFactory
 	t.Cleanup(func() {

@@ -183,6 +183,9 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	}
 
 	resumeID := strings.TrimSpace(*resumeCheckpoint)
+	if resumeID != "" && *stream {
+		return errors.New("--resume cannot be combined with --stream")
+	}
 	if *repl || shouldAutoEnterInteractive(*promptLiteral, *promptFile, flags.Args(), *stream, *acpMode, resumeID) {
 		clikit.PrintBanner(stdout, adapter.ModelName(), adapter.Skills())
 		return clikitRunInteractiveShell(context.Background(), os.Stdin, stdout, stderr, adapter, *timeoutMs, *verbose, *waterfall, resolvedSessionID)

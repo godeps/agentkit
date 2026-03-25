@@ -7,6 +7,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/chzyer/readline"
 	"github.com/godeps/agentkit/pkg/api"
@@ -30,6 +31,8 @@ type shellState struct {
 	lastResponse   *api.Response
 	lastCheckpoint string
 }
+
+var runStreamRenderer = RunStream
 
 func NewInteractiveShell(cfg InteractiveShellConfig) *InteractiveShell {
 	return &InteractiveShell{cfg: cfg}
@@ -119,23 +122,21 @@ func (s *InteractiveShell) Run(ctx context.Context, in io.ReadCloser, out, errOu
 			continue
 		}
 
-		if handled, quit := handleCommand(input, s.cfg.Engine, &sessionID, state, ctx, out, errOut); handled {
+		if handled, quit := handleCommand(input, s.cfg.Engine, &sessionID, state, ctx, out, errOut, s.cfg.TimeoutMs); handled {
 			if quit {
 				return nil
 			}
 			continue
 		}
 
-		resp, err := s.cfg.Engine.Run(ctx, api.Request{
+		err = runStreamRenderer(ctx, out, errOut, s.cfg.Engine, api.Request{
 			Prompt:    input,
 			SessionID: sessionID,
-		})
+		}, s.cfg.TimeoutMs, s.cfg.Verbose, s.cfg.WaterfallMode)
 		if err != nil {
 			fmt.Fprintf(errOut, "run failed: %v\n", err)
 			continue
 		}
-		updateShellState(state, resp)
-		renderResponseSummary(out, resp)
 	}
 	fmt.Fprintln(out, "bye")
 	return nil
@@ -154,7 +155,7 @@ func isReadTermination(err error) bool {
 	return errors.Is(err, io.EOF)
 }
 
-func handleCommand(input string, eng ReplEngine, sessionID *string, state *shellState, ctx context.Context, out, errOut io.Writer) (handled bool, quit bool) {
+func handleCommand(input string, eng ReplEngine, sessionID *string, state *shellState, ctx context.Context, out, errOut io.Writer, timeoutMs int) (handled bool, quit bool) {
 	if out == nil {
 		out = io.Discard
 	}
@@ -210,7 +211,13 @@ func handleCommand(input string, eng ReplEngine, sessionID *string, state *shell
 			fmt.Fprintln(out, "usage: /resume <checkpoint-id>")
 			return true, false
 		}
-		resp, err := eng.Resume(ctx, strings.TrimSpace(fields[1]))
+		resumeCtx := ctx
+		cancel := func() {}
+		if timeoutMs > 0 {
+			resumeCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
+		}
+		defer cancel()
+		resp, err := eng.Resume(resumeCtx, strings.TrimSpace(fields[1]))
 		if err != nil {
 			if errOut != nil {
 				fmt.Fprintf(errOut, "resume failed: %v\n", err)

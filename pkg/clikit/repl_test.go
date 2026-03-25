@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/chzyer/readline"
 	"github.com/godeps/agentkit/pkg/api"
@@ -66,7 +67,7 @@ func (f fakeReplEngine) Timeline(resp *api.Response) []api.TimelineEntry {
 func TestHandleCommandListsSkills(t *testing.T) {
 	var out bytes.Buffer
 	sessionID := "s1"
-	handled, quit := handleCommand("/skills", fakeReplEngine{}, &sessionID, &shellState{}, context.Background(), &out, io.Discard)
+	handled, quit := handleCommand("/skills", fakeReplEngine{}, &sessionID, &shellState{}, context.Background(), &out, io.Discard, 0)
 	if !handled {
 		t.Fatalf("skills command should be handled")
 	}
@@ -80,15 +81,25 @@ func TestHandleCommandListsSkills(t *testing.T) {
 
 type scriptedReplEngine struct {
 	calls       []api.Request
+	streamCalls []api.Request
 	runResponse *api.Response
 	runErr      error
 	resumeIDs   []string
 	resumeResp  *api.Response
 	resumeErr   error
+	resumeFn    func(context.Context, string) (*api.Response, error)
 }
 
 func (s *scriptedReplEngine) RunStream(_ context.Context, req api.Request) (<-chan api.StreamEvent, error) {
-	panic("unexpected stream path")
+	s.streamCalls = append(s.streamCalls, req)
+	if s.runErr != nil {
+		err := s.runErr
+		s.runErr = nil
+		return nil, err
+	}
+	ch := make(chan api.StreamEvent)
+	close(ch)
+	return ch, nil
 }
 
 func (s *scriptedReplEngine) Run(_ context.Context, req api.Request) (*api.Response, error) {
@@ -104,8 +115,11 @@ func (s *scriptedReplEngine) Run(_ context.Context, req api.Request) (*api.Respo
 	return &api.Response{Result: &api.Result{Output: "ok"}}, nil
 }
 
-func (s *scriptedReplEngine) Resume(_ context.Context, checkpointID string) (*api.Response, error) {
+func (s *scriptedReplEngine) Resume(ctx context.Context, checkpointID string) (*api.Response, error) {
 	s.resumeIDs = append(s.resumeIDs, checkpointID)
+	if s.resumeFn != nil {
+		return s.resumeFn(ctx, checkpointID)
+	}
 	if s.resumeErr != nil {
 		err := s.resumeErr
 		s.resumeErr = nil
@@ -131,10 +145,20 @@ func (s *scriptedReplEngine) Timeline(resp *api.Response) []api.TimelineEntry {
 }
 
 func TestInteractiveShellPrintsStatusAndContinuesAfterErrors(t *testing.T) {
+	origRunStream := runStreamRenderer
+	t.Cleanup(func() { runStreamRenderer = origRunStream })
+	runStreamRenderer = func(parent context.Context, out, errOut io.Writer, eng StreamEngine, req api.Request, timeoutMs int, verbose bool, waterfallMode string) error {
+		if timeoutMs != 100 || verbose || waterfallMode != WaterfallModeOff {
+			t.Fatalf("unexpected renderer config timeout=%d verbose=%v waterfall=%s", timeoutMs, verbose, waterfallMode)
+		}
+		_, err := eng.RunStream(parent, req)
+		return err
+	}
 	in := io.NopCloser(bytes.NewBufferString("/session\nhello\nworld\n/quit\n"))
 	var out bytes.Buffer
 	var errOut bytes.Buffer
-	eng := &scriptedReplEngine{runErr: io.ErrUnexpectedEOF}
+	eng := &scriptedReplEngine{}
+	eng.runErr = io.ErrUnexpectedEOF
 
 	shell := NewInteractiveShell(InteractiveShellConfig{
 		Engine:            eng,
@@ -164,11 +188,11 @@ func TestInteractiveShellPrintsStatusAndContinuesAfterErrors(t *testing.T) {
 	if !bytes.Contains([]byte(got), []byte("Skills: 2")) {
 		t.Fatalf("expected skills count, got %q", got)
 	}
-	if len(eng.calls) != 2 {
-		t.Fatalf("expected two prompts to be attempted, got %+v", eng.calls)
+	if len(eng.streamCalls) != 2 {
+		t.Fatalf("expected two prompts to be attempted, got %+v", eng.streamCalls)
 	}
-	if eng.calls[0].SessionID != "sess-1" || eng.calls[0].Prompt != "hello" {
-		t.Fatalf("unexpected first call: %+v", eng.calls[0])
+	if eng.streamCalls[0].SessionID != "sess-1" || eng.streamCalls[0].Prompt != "hello" {
+		t.Fatalf("unexpected first call: %+v", eng.streamCalls[0])
 	}
 	if errText := errOut.String(); errText == "" || !bytes.Contains([]byte(errText), []byte("run failed")) {
 		t.Fatalf("expected run failure on stderr, got %q", errText)
@@ -182,6 +206,12 @@ func TestInteractiveShellPrintsStatusAndContinuesAfterErrors(t *testing.T) {
 }
 
 func TestInteractiveShellUnknownSlashInputFallsThrough(t *testing.T) {
+	origRunStream := runStreamRenderer
+	t.Cleanup(func() { runStreamRenderer = origRunStream })
+	runStreamRenderer = func(parent context.Context, out, errOut io.Writer, eng StreamEngine, req api.Request, timeoutMs int, verbose bool, waterfallMode string) error {
+		_, err := eng.RunStream(parent, req)
+		return err
+	}
 	in := io.NopCloser(bytes.NewBufferString("/unknown hi\n/quit\n"))
 	var out bytes.Buffer
 	var errOut bytes.Buffer
@@ -199,11 +229,71 @@ func TestInteractiveShellUnknownSlashInputFallsThrough(t *testing.T) {
 		t.Fatalf("run shell: %v", err)
 	}
 
-	if len(eng.calls) != 1 || eng.calls[0].SessionID != "sess-2" || eng.calls[0].Prompt != "/unknown hi" {
-		t.Fatalf("unexpected stream calls: %+v", eng.calls)
+	if len(eng.streamCalls) != 1 || eng.streamCalls[0].SessionID != "sess-2" || eng.streamCalls[0].Prompt != "/unknown hi" {
+		t.Fatalf("unexpected stream calls: %+v", eng.streamCalls)
 	}
 	if got := out.String(); bytes.Contains([]byte(got), []byte("unknown command")) {
 		t.Fatalf("unexpected unknown command output: %q", got)
+	}
+}
+
+func TestInteractiveShellUsesRunStreamRendererForNormalInput(t *testing.T) {
+	origRunStream := runStreamRenderer
+	t.Cleanup(func() { runStreamRenderer = origRunStream })
+	called := false
+	runStreamRenderer = func(parent context.Context, out, errOut io.Writer, eng StreamEngine, req api.Request, timeoutMs int, verbose bool, waterfallMode string) error {
+		called = true
+		if req.Prompt != "hello" || req.SessionID != "sess-4" {
+			t.Fatalf("unexpected request: %+v", req)
+		}
+		if timeoutMs != 250 || !verbose || waterfallMode != WaterfallModeSummary {
+			t.Fatalf("unexpected renderer config timeout=%d verbose=%v waterfall=%s", timeoutMs, verbose, waterfallMode)
+		}
+		return nil
+	}
+
+	in := io.NopCloser(bytes.NewBufferString("hello\n/quit\n"))
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	eng := &scriptedReplEngine{}
+	shell := NewInteractiveShell(InteractiveShellConfig{
+		Engine:            eng,
+		InitialSessionID:  "sess-4",
+		TimeoutMs:         250,
+		Verbose:           true,
+		WaterfallMode:     WaterfallModeSummary,
+		ShowStatusPerTurn: false,
+	})
+	if err := shell.Run(context.Background(), in, &out, &errOut); err != nil {
+		t.Fatalf("run shell: %v", err)
+	}
+	if !called {
+		t.Fatalf("expected renderer to be called")
+	}
+	if len(eng.calls) != 0 {
+		t.Fatalf("normal input should not use Run path: %+v", eng.calls)
+	}
+}
+
+func TestHandleCommandResumeUsesPerTurnTimeoutContext(t *testing.T) {
+	var out bytes.Buffer
+	sessionID := "s1"
+	state := &shellState{}
+	eng := &scriptedReplEngine{
+		resumeFn: func(ctx context.Context, checkpointID string) (*api.Response, error) {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatalf("expected deadline on resume context")
+			}
+			if time.Until(deadline) <= 0 || time.Until(deadline) > 200*time.Millisecond {
+				t.Fatalf("unexpected deadline delta: %v", time.Until(deadline))
+			}
+			return &api.Response{Result: &api.Result{Output: checkpointID}}, nil
+		},
+	}
+	handled, quit := handleCommand("/resume cp-1", eng, &sessionID, state, context.Background(), &out, io.Discard, 150)
+	if !handled || quit {
+		t.Fatalf("expected handled resume command")
 	}
 }
 
@@ -260,7 +350,7 @@ func TestHandleCommandTimelineWithoutLastResponse(t *testing.T) {
 	var out bytes.Buffer
 	sessionID := "s1"
 	state := &shellState{}
-	handled, quit := handleCommand("/timeline", fakeReplEngine{}, &sessionID, state, context.Background(), &out, io.Discard)
+	handled, quit := handleCommand("/timeline", fakeReplEngine{}, &sessionID, state, context.Background(), &out, io.Discard, 0)
 	if !handled || quit {
 		t.Fatalf("timeline command should be handled without quit")
 	}
