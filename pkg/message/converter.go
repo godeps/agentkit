@@ -1,5 +1,7 @@
 package message
 
+import "github.com/godeps/agentkit/pkg/artifact"
+
 // ContentBlockType discriminates the kind of content in a ContentBlock.
 type ContentBlockType string
 
@@ -25,6 +27,7 @@ type Message struct {
 	Role             string
 	Content          string
 	ContentBlocks    []ContentBlock // Multimodal content; takes precedence over Content when non-empty
+	Artifacts        []artifact.ArtifactRef
 	ToolCalls        []ToolCall
 	ReasoningContent string
 }
@@ -42,6 +45,7 @@ type ToolCall struct {
 func CloneMessage(msg Message) Message {
 	clone := Message{Role: msg.Role, Content: msg.Content, ReasoningContent: msg.ReasoningContent}
 	clone.ContentBlocks = cloneContentBlocks(msg.ContentBlocks)
+	clone.Artifacts = cloneArtifactRefs(msg.Artifacts)
 	clone.ToolCalls = cloneToolCalls(msg.ToolCalls)
 	return clone
 }
@@ -75,6 +79,15 @@ func cloneContentBlocks(blocks []ContentBlock) []ContentBlock {
 	}
 	out := make([]ContentBlock, len(blocks))
 	copy(out, blocks)
+	return out
+}
+
+func cloneArtifactRefs(refs []artifact.ArtifactRef) []artifact.ArtifactRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]artifact.ArtifactRef, len(refs))
+	copy(out, refs)
 	return out
 }
 

@@ -2,6 +2,7 @@ package clikit
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/godeps/agentkit/pkg/api"
@@ -11,6 +12,10 @@ import (
 
 type streamRuntime interface {
 	RunStream(context.Context, api.Request) (<-chan api.StreamEvent, error)
+}
+
+type responseRuntime interface {
+	Run(context.Context, api.Request) (*api.Response, error)
 }
 
 type RuntimeAdapterConfig struct {
@@ -102,6 +107,14 @@ func (a *RuntimeAdapter) RepoRoot() string {
 
 func (a *RuntimeAdapter) RunStream(ctx context.Context, sessionID, prompt string) (<-chan api.StreamEvent, error) {
 	return a.runtime.RunStream(ctx, api.Request{Prompt: prompt, SessionID: sessionID})
+}
+
+func (a *RuntimeAdapter) Run(ctx context.Context, sessionID, prompt string) (*api.Response, error) {
+	withResponse, ok := a.runtime.(responseRuntime)
+	if !ok {
+		return nil, errors.New("clikit: runtime does not support non-streaming runs")
+	}
+	return withResponse.Run(ctx, api.Request{Prompt: prompt, SessionID: sessionID})
 }
 
 func (a *RuntimeAdapter) ModelTurnCount(sessionID string) int {

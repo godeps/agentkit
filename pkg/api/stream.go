@@ -27,6 +27,7 @@ const (
 	EventToolExecutionStart  = "tool_execution_start"
 	EventToolExecutionOutput = "tool_execution_output"
 	EventToolExecutionResult = "tool_execution_result"
+	EventTimeline            = "timeline"
 	EventError               = "error"
 )
 
@@ -36,11 +37,12 @@ type StreamEvent struct {
 	Type string `json:"type"` // Type identifies the concrete SSE event kind.
 
 	// Anthropic-compatible payloads.
-	Message      *Message      `json:"message,omitempty"`       // Message holds the envelope for message_* events.
-	Index        *int          `json:"index,omitempty"`         // Index orders content blocks/deltas within the message.
-	ContentBlock *ContentBlock `json:"content_block,omitempty"` // ContentBlock contains partial or full block data.
-	Delta        *Delta        `json:"delta,omitempty"`         // Delta carries incremental text/tool updates.
-	Usage        *Usage        `json:"usage,omitempty"`         // Usage records token consumption snapshots.
+	Message      *Message       `json:"message,omitempty"`       // Message holds the envelope for message_* events.
+	Index        *int           `json:"index,omitempty"`         // Index orders content blocks/deltas within the message.
+	ContentBlock *ContentBlock  `json:"content_block,omitempty"` // ContentBlock contains partial or full block data.
+	Delta        *Delta         `json:"delta,omitempty"`         // Delta carries incremental text/tool updates.
+	Usage        *Usage         `json:"usage,omitempty"`         // Usage records token consumption snapshots.
+	Timeline     *TimelineEntry `json:"timeline,omitempty"`      // Timeline carries structured multimodal trace entries.
 
 	// Agent-specific extensions.
 	ToolUseID string      `json:"tool_use_id,omitempty"`      // ToolUseID associates tool events with tool execution records.

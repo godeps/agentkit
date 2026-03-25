@@ -27,8 +27,8 @@ func TestExecutorSpawnAndWaitCompletesInstance(t *testing.T) {
 	})
 
 	handle, err := exec.Spawn(WithTaskDispatch(context.Background()), SpawnRequest{
-		Target:       "plan",
-		Instruction:  "outline this",
+		Target:        "plan",
+		Instruction:   "outline this",
 		ParentContext: Context{SessionID: "parent"},
 	})
 	if err != nil {

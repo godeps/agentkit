@@ -17,6 +17,7 @@ agentkit is a modular agent development framework that implements core Claude Co
 ### Core Capabilities
 - **Multi-model Support**: Subagent-level model binding via `ModelFactory` interface
 - **Structured Output**: OpenAI-compatible models can be constrained with `json_object` or `json_schema`
+- **Artifact-First Pipelines**: Multimodal artifacts, pipeline steps, lineage, cache, and checkpoints are first-class runtime concepts
 - **Token Statistics**: Comprehensive token usage tracking with automatic accumulation
 - **Auto Compact**: Automatic context compression when token threshold reached
 - **Async Bash**: Background command execution with task management
@@ -42,6 +43,9 @@ agentkit is a modular agent development framework that implements core Claude Co
 - `examples/10-hooks` - Hooks lifecycle events
 - `examples/11-reasoning` - Reasoning/thinking model support
 - `examples/12-multimodal` - Image and document input
+- `examples/14-artifact-pipeline` - Artifact-first multimodal pipeline
+- `examples/15-resumable-review` - Checkpointed human review and resume
+- `examples/16-timeline` - Inspect multimodal execution timeline
 
 ### Shared CLI Support
 
@@ -90,6 +94,18 @@ Notes:
 - Unknown skill names fail fast with an `api: unknown skill ...` error.
 
 For the full CLI manual, see [docs/cli.md](docs/cli.md).
+
+### Multimodal Runtime Primitives
+
+The runtime now includes a lightweight multimodal execution substrate:
+
+- `pkg/artifact` for artifact refs, metadata, lineage, and cache keys
+- `pkg/pipeline` for `Step`, `Batch`, `FanOut`, `FanIn`, `Retry`, and `Checkpoint`
+- `pkg/runtime/checkpoint` for in-memory and file-backed resumable checkpoint stores
+- `pkg/runtime/cache` for in-memory and file-backed artifact result caches
+- `api.Response.Timeline` plus `EventTimeline` for pipeline-backed execution traces
+
+Pipeline-backed `RunStream` calls emit timeline entries as stream events without removing the existing text/tool event model for normal prompt-driven runs.
 
 ## System Architecture
 

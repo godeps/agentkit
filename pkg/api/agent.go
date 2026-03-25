@@ -14,12 +14,16 @@ import (
 	"time"
 
 	"github.com/godeps/agentkit/pkg/agent"
+	"github.com/godeps/agentkit/pkg/artifact"
 	"github.com/godeps/agentkit/pkg/config"
 	coreevents "github.com/godeps/agentkit/pkg/core/events"
 	corehooks "github.com/godeps/agentkit/pkg/core/hooks"
 	"github.com/godeps/agentkit/pkg/message"
 	"github.com/godeps/agentkit/pkg/middleware"
 	"github.com/godeps/agentkit/pkg/model"
+	"github.com/godeps/agentkit/pkg/pipeline"
+	runtimecache "github.com/godeps/agentkit/pkg/runtime/cache"
+	"github.com/godeps/agentkit/pkg/runtime/checkpoint"
 	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
 	"github.com/godeps/agentkit/pkg/runtime/subagents"
@@ -77,15 +81,17 @@ type Runtime struct {
 	historyPersister *diskHistoryPersister
 	sessionGate      *sessionGate
 
-	cmdExec   *commands.Executor
-	skReg     *skills.Registry
-	subMgr    *subagents.Manager
-	subStore  subagents.Store
-	subExec   *subagents.Executor
-	taskStore tasks.Store
-	tokens    *tokenTracker
-	compactor *compactor
-	tracer    Tracer
+	cmdExec     *commands.Executor
+	skReg       *skills.Registry
+	subMgr      *subagents.Manager
+	subStore    subagents.Store
+	subExec     *subagents.Executor
+	taskStore   tasks.Store
+	checkpoints checkpoint.Store
+	cacheStore  runtimecache.Store
+	tokens      *tokenTracker
+	compactor   *compactor
+	tracer      Tracer
 
 	mu sync.RWMutex
 
@@ -226,10 +232,15 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		subMgr:           subMgr,
 		subStore:         subagents.NewMemoryStore(),
 		taskStore:        opts.TaskStore,
+		checkpoints:      opts.CheckpointStore,
+		cacheStore:       opts.CacheStore,
 		tokens:           newTokenTracker(opts.TokenTracking, opts.TokenCallback),
 		compactor:        compactor,
 		tracer:           tracer,
 		ownsTaskStore:    ownsTaskStore,
+	}
+	if rt.checkpoints == nil {
+		rt.checkpoints = checkpoint.NewMemoryStore()
 	}
 	if rt.subMgr != nil {
 		rt.subExec = subagents.NewExecutor(rt.subMgr, rt.subStore, runtimeSubagentRunner{rt: rt})
@@ -277,6 +288,10 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	defer rt.sessionGate.Release(sessionID)
 
+	if req.Pipeline != nil || strings.TrimSpace(req.ResumeFromCheckpoint) != "" {
+		return rt.runPipeline(ctx, req)
+	}
+
 	prep, err := rt.prepare(ctx, req)
 	if err != nil {
 		return nil, err
@@ -289,12 +304,338 @@ func (rt *Runtime) Run(ctx context.Context, req Request) (*Response, error) {
 	return rt.buildResponse(prep, result), nil
 }
 
+func (rt *Runtime) runPipeline(ctx context.Context, req Request) (*Response, error) {
+	normalized := req.normalized(rt.mode, defaultSessionID(rt.mode.EntryPoint))
+	if normalized.SessionID == "" {
+		normalized.SessionID = defaultSessionID(rt.mode.EntryPoint)
+	}
+	if normalized.RequestID == "" {
+		normalized.RequestID = uuid.New().String()
+	}
+
+	if strings.TrimSpace(normalized.ResumeFromCheckpoint) != "" {
+		return rt.resumePipeline(ctx, normalized)
+	}
+	if normalized.Pipeline == nil {
+		return nil, errors.New("api: pipeline is required")
+	}
+
+	timeline := &timelineCollector{}
+	result, checkpointID, interrupted, err := rt.executePipelineTree(ctx, *normalized.Pipeline, pipeline.Input{}, normalized.SessionID, timeline)
+	if err != nil {
+		return nil, err
+	}
+	return rt.pipelineResponse(normalized, result, checkpointID, interrupted, timeline), nil
+}
+
+func (rt *Runtime) resumePipeline(ctx context.Context, req Request) (*Response, error) {
+	if rt.checkpoints == nil {
+		return nil, errors.New("api: checkpoint store not configured")
+	}
+	entry, err := rt.checkpoints.Load(ctx, req.ResumeFromCheckpoint)
+	if err != nil {
+		return nil, err
+	}
+	if entry.SessionID != "" && req.SessionID != "" && entry.SessionID != req.SessionID {
+		return nil, fmt.Errorf("api: checkpoint %s does not belong to session %s", req.ResumeFromCheckpoint, req.SessionID)
+	}
+
+	timeline := &timelineCollector{}
+	timeline.add(TimelineEntry{Kind: TimelineCheckpointResume, CheckpointID: req.ResumeFromCheckpoint})
+	result := entry.Result
+	checkpointID := ""
+	interrupted := false
+	if entry.Remaining != nil {
+		next, nextCheckpointID, nextInterrupted, err := rt.executePipelineTree(ctx, *entry.Remaining, entry.Input, entry.SessionID, timeline)
+		if err != nil {
+			return nil, err
+		}
+		result = mergePipelineResult(result, next)
+		checkpointID = nextCheckpointID
+		interrupted = nextInterrupted
+	}
+	if !interrupted {
+		_ = rt.checkpoints.Delete(ctx, req.ResumeFromCheckpoint)
+	}
+	return rt.pipelineResponse(req, result, checkpointID, interrupted, timeline), nil
+}
+
+func (rt *Runtime) pipelineResponse(req Request, result pipeline.Result, checkpointID string, interrupted bool, timeline *timelineCollector) *Response {
+	stopReason := "completed"
+	if interrupted {
+		stopReason = "interrupted"
+	}
+	var timelineEntries []TimelineEntry
+	if timeline != nil {
+		timeline.add(TimelineEntry{Kind: TimelineTokenSnapshot, Usage: &model.Usage{}})
+		timelineEntries = timeline.snapshot()
+	}
+	return &Response{
+		Mode:      req.Mode,
+		RequestID: req.RequestID,
+		Result: &Result{
+			Output:       result.Output,
+			StopReason:   stopReason,
+			Artifacts:    append([]artifact.ArtifactRef(nil), result.Artifacts...),
+			Structured:   result.Structured,
+			CheckpointID: checkpointID,
+			Interrupted:  interrupted,
+		},
+		Timeline:        timelineEntries,
+		ProjectConfig:   rt.Settings(),
+		Settings:        rt.Settings(),
+		SandboxSnapshot: rt.sandboxReport(),
+		Tags:            maps.Clone(req.Tags),
+	}
+}
+
+func (rt *Runtime) executePipelineTree(ctx context.Context, step pipeline.Step, input pipeline.Input, sessionID string, timeline *timelineCollector) (pipeline.Result, string, bool, error) {
+	if step.Batch != nil {
+		current := clonePipelineInput(input)
+		var final pipeline.Result
+		for i, child := range step.Batch.Steps {
+			if child.Checkpoint != nil {
+				checkpointResult, err := rt.newPipelineExecutor(sessionID, timeline).Execute(ctx, child.Checkpoint.Step, current)
+				if err != nil {
+					return pipeline.Result{}, "", false, err
+				}
+				final = mergePipelineResult(final, checkpointResult)
+				current = pipelineInputFromResult(current, checkpointResult)
+				var remaining *pipeline.Step
+				if i+1 < len(step.Batch.Steps) {
+					remaining = &pipeline.Step{Batch: &pipeline.Batch{Steps: append([]pipeline.Step(nil), step.Batch.Steps[i+1:]...)}}
+				}
+				checkpointID, err := rt.checkpoints.Save(ctx, checkpoint.Entry{
+					SessionID: sessionID,
+					Remaining: remaining,
+					Input:     current,
+					Result:    final,
+				})
+				if err != nil {
+					return pipeline.Result{}, "", false, err
+				}
+				if timeline != nil {
+					timeline.add(TimelineEntry{Kind: TimelineCheckpointCreate, CheckpointID: checkpointID, Name: child.Checkpoint.Name})
+				}
+				return final, checkpointID, true, nil
+			}
+			result, nestedCheckpointID, interrupted, err := rt.executePipelineTree(ctx, child, current, sessionID, timeline)
+			if err != nil {
+				return pipeline.Result{}, "", false, err
+			}
+			final = mergePipelineResult(final, result)
+			current = pipelineInputFromResult(current, result)
+			if interrupted {
+				return final, nestedCheckpointID, true, nil
+			}
+		}
+		return final, "", false, nil
+	}
+	if step.Checkpoint != nil {
+		result, err := rt.newPipelineExecutor(sessionID, timeline).Execute(ctx, step.Checkpoint.Step, input)
+		if err != nil {
+			return pipeline.Result{}, "", false, err
+		}
+		checkpointID, err := rt.checkpoints.Save(ctx, checkpoint.Entry{
+			SessionID: sessionID,
+			Input:     pipelineInputFromResult(input, result),
+			Result:    result,
+		})
+		if err != nil {
+			return pipeline.Result{}, "", false, err
+		}
+		if timeline != nil {
+			timeline.add(TimelineEntry{Kind: TimelineCheckpointCreate, CheckpointID: checkpointID, Name: step.Checkpoint.Name})
+		}
+		return result, checkpointID, true, nil
+	}
+	result, err := rt.newPipelineExecutor(sessionID, timeline).Execute(ctx, step, input)
+	if err != nil {
+		return pipeline.Result{}, "", false, err
+	}
+	return result, "", false, nil
+}
+
+func (rt *Runtime) newPipelineExecutor(sessionID string, timeline *timelineCollector) pipeline.Executor {
+	return pipeline.Executor{
+		Cache: timelineCacheStore{base: rt.cacheStore, timeline: timeline},
+		RunTool: func(ctx context.Context, step pipeline.Step, refs []artifact.ArtifactRef) (*tool.ToolResult, error) {
+			for _, ref := range refs {
+				if timeline != nil {
+					copied := ref
+					timeline.add(TimelineEntry{Kind: TimelineInputArtifact, Name: step.Name, Artifact: &copied})
+				}
+			}
+			params := cloneArguments(step.With)
+			if params == nil {
+				params = map[string]any{}
+			}
+			params["step"] = step.Name
+			if len(refs) > 0 {
+				params["artifacts"] = refs
+			}
+			if timeline != nil {
+				timeline.add(TimelineEntry{Kind: TimelineToolCall, Name: step.Name})
+			}
+			started := time.Now()
+			res, err := rt.executor.Execute(ctx, tool.Call{
+				Name:      step.Tool,
+				Params:    params,
+				Path:      rt.sbRoot,
+				Host:      "localhost",
+				SessionID: sessionID,
+			})
+			if err != nil {
+				return nil, err
+			}
+			if res == nil {
+				return nil, nil
+			}
+			if timeline != nil && res.Result != nil {
+				timeline.add(TimelineEntry{Kind: TimelineToolResult, Name: step.Name, Output: res.Result.Output})
+				timeline.add(TimelineEntry{Kind: TimelineLatencySnapshot, Name: step.Name, Duration: time.Since(started)})
+				for _, generated := range res.Result.Artifacts {
+					copied := generated
+					timeline.add(TimelineEntry{Kind: TimelineGeneratedArtifact, Name: step.Name, Artifact: &copied})
+				}
+			}
+			return res.Result, nil
+		},
+		RunSkill: func(ctx context.Context, step pipeline.Step, refs []artifact.ArtifactRef) (*tool.ToolResult, error) {
+			if rt.skReg == nil {
+				return nil, fmt.Errorf("pipeline: skills registry not configured")
+			}
+			for _, ref := range refs {
+				if timeline != nil {
+					copied := ref
+					timeline.add(TimelineEntry{Kind: TimelineInputArtifact, Name: step.Name, Artifact: &copied})
+				}
+			}
+			meta := cloneArguments(step.With)
+			if meta == nil {
+				meta = map[string]any{}
+			}
+			if len(refs) > 0 {
+				meta["artifacts"] = refs
+			}
+			if timeline != nil {
+				timeline.add(TimelineEntry{Kind: TimelineToolCall, Name: step.Name})
+			}
+			started := time.Now()
+			res, err := rt.skReg.Execute(ctx, step.Skill, skills.ActivationContext{
+				Prompt:   step.Name,
+				Metadata: meta,
+			})
+			if err != nil {
+				return nil, err
+			}
+			out := &tool.ToolResult{}
+			switch val := res.Output.(type) {
+			case string:
+				out.Output = val
+			default:
+				out.Structured = val
+			}
+			if arts, ok := res.Metadata["artifacts"].([]artifact.ArtifactRef); ok {
+				out.Artifacts = append([]artifact.ArtifactRef(nil), arts...)
+			}
+			if timeline != nil {
+				timeline.add(TimelineEntry{Kind: TimelineToolResult, Name: step.Name, Output: out.Output})
+				timeline.add(TimelineEntry{Kind: TimelineLatencySnapshot, Name: step.Name, Duration: time.Since(started)})
+				for _, generated := range out.Artifacts {
+					copied := generated
+					timeline.add(TimelineEntry{Kind: TimelineGeneratedArtifact, Name: step.Name, Artifact: &copied})
+				}
+			}
+			return out, nil
+		},
+	}
+}
+
+type timelineCacheStore struct {
+	base     runtimecache.Store
+	timeline *timelineCollector
+}
+
+func (t timelineCacheStore) Load(ctx context.Context, key artifact.CacheKey) (*tool.ToolResult, bool, error) {
+	if t.base == nil {
+		return nil, false, nil
+	}
+	result, ok, err := t.base.Load(ctx, key)
+	if t.timeline != nil {
+		kind := TimelineCacheMiss
+		if ok {
+			kind = TimelineCacheHit
+		}
+		t.timeline.add(TimelineEntry{Kind: kind, CacheKey: string(key)})
+	}
+	return result, ok, err
+}
+
+func (t timelineCacheStore) Save(ctx context.Context, key artifact.CacheKey, result *tool.ToolResult) error {
+	if t.base == nil {
+		return nil
+	}
+	return t.base.Save(ctx, key, result)
+}
+
+func pipelineInputFromResult(previous pipeline.Input, result pipeline.Result) pipeline.Input {
+	next := clonePipelineInput(previous)
+	next.Items = append([]pipeline.Result(nil), result.Items...)
+	if len(result.Artifacts) > 0 {
+		next.Artifacts = append([]artifact.ArtifactRef(nil), result.Artifacts...)
+	}
+	return next
+}
+
+func clonePipelineInput(in pipeline.Input) pipeline.Input {
+	return pipeline.Input{
+		Artifacts:   append([]artifact.ArtifactRef(nil), in.Artifacts...),
+		Collections: clonePipelineCollections(in.Collections),
+		Items:       append([]pipeline.Result(nil), in.Items...),
+	}
+}
+
+func clonePipelineCollections(in map[string][]artifact.ArtifactRef) map[string][]artifact.ArtifactRef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string][]artifact.ArtifactRef, len(in))
+	for key, refs := range in {
+		out[key] = append([]artifact.ArtifactRef(nil), refs...)
+	}
+	return out
+}
+
+func mergePipelineResult(base, next pipeline.Result) pipeline.Result {
+	if next.Output != "" {
+		base.Output = next.Output
+	}
+	if next.Summary != "" {
+		base.Summary = next.Summary
+	}
+	if next.Structured != nil {
+		base.Structured = next.Structured
+	}
+	if next.Preview != nil {
+		base.Preview = next.Preview
+	}
+	if len(next.Artifacts) > 0 {
+		base.Artifacts = append([]artifact.ArtifactRef(nil), next.Artifacts...)
+	}
+	if len(next.Items) > 0 {
+		base.Items = append([]pipeline.Result(nil), next.Items...)
+	}
+	base.Lineage.Edges = append(base.Lineage.Edges, next.Lineage.Edges...)
+	return base
+}
+
 // RunStream executes the pipeline asynchronously and returns events over a channel.
 func (rt *Runtime) RunStream(ctx context.Context, req Request) (<-chan StreamEvent, error) {
 	if rt == nil {
 		return nil, ErrRuntimeClosed
 	}
-	if strings.TrimSpace(req.Prompt) == "" && len(req.ContentBlocks) == 0 {
+	if req.Pipeline == nil && strings.TrimSpace(req.ResumeFromCheckpoint) == "" && strings.TrimSpace(req.Prompt) == "" && len(req.ContentBlocks) == 0 {
 		return nil, errors.New("api: prompt is empty")
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
@@ -305,6 +646,34 @@ func (rt *Runtime) RunStream(ctx context.Context, req Request) (<-chan StreamEve
 
 	if err := rt.beginRun(); err != nil {
 		return nil, err
+	}
+
+	if req.Pipeline != nil || strings.TrimSpace(req.ResumeFromCheckpoint) != "" {
+		out := make(chan StreamEvent, 256)
+		go func() {
+			defer rt.endRun()
+			defer close(out)
+			if err := rt.sessionGate.Acquire(ctx, sessionID); err != nil {
+				isErr := true
+				out <- StreamEvent{Type: EventError, Output: ErrConcurrentExecution.Error(), IsError: &isErr}
+				return
+			}
+			defer rt.sessionGate.Release(sessionID)
+
+			out <- StreamEvent{Type: EventAgentStart, SessionID: sessionID}
+			resp, err := rt.runPipeline(ctx, req)
+			if err != nil {
+				isErr := true
+				out <- StreamEvent{Type: EventError, Output: err.Error(), IsError: &isErr, SessionID: sessionID}
+				return
+			}
+			for _, entry := range resp.Timeline {
+				entryCopy := entry
+				out <- StreamEvent{Type: EventTimeline, Timeline: &entryCopy, SessionID: sessionID}
+			}
+			out <- StreamEvent{Type: EventAgentStop, SessionID: sessionID}
+		}()
+		return out, nil
 	}
 
 	// 缓冲区增大以吸收前端延迟（逐字符渲染等）导致的背压，避免 progress emit 阻塞工具执行
@@ -1359,7 +1728,7 @@ func (t *runtimeToolExecutor) isAllowed(ctx context.Context, name string) bool {
 }
 
 func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, _ *agent.Context) (agent.ToolResult, error) {
-	appendToolResult := func(content string, blocks []model.ContentBlock) {
+	appendToolResult := func(content string, blocks []model.ContentBlock, artifacts []artifact.ArtifactRef) {
 		if t.history != nil {
 			t.history.Append(message.Message{
 				Role: "tool",
@@ -1369,17 +1738,18 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 					Result: content,
 				}},
 			})
-			if len(blocks) > 0 {
+			if len(blocks) > 0 || len(artifacts) > 0 {
 				t.history.Append(message.Message{
 					Role:          "user",
 					Content:       fmt.Sprintf("[multimodal content from tool: %s]", call.Name),
 					ContentBlocks: convertAPIContentBlocks(blocks),
+					Artifacts:     append([]artifact.ArtifactRef(nil), artifacts...),
 				})
 			}
 		}
 	}
 	appendEarlyError := func(err error) error {
-		appendToolResult(fmt.Sprintf("Tool execution failed: %v", err), nil)
+		appendToolResult(fmt.Sprintf("Tool execution failed: %v", err), nil, nil)
 		return err
 	}
 
@@ -1455,7 +1825,7 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 	if preErr != nil {
 		// Hook denied execution - still need to add tool_result to history
 		errContent := fmt.Sprintf(`{"error":%q}`, preErr.Error())
-		appendToolResult(errContent, nil)
+		appendToolResult(errContent, nil, nil)
 		return agent.ToolResult{Name: call.Name, Output: errContent, Metadata: map[string]any{"error": preErr.Error()}}, preErr
 	}
 	if params != nil {
@@ -1494,16 +1864,30 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 	meta := map[string]any{}
 	content := ""
 	var blocks []model.ContentBlock
+	var artifacts []artifact.ArtifactRef
 	if result != nil && result.Result != nil {
 		toolResult.Output = result.Result.Output
 		meta["data"] = result.Result.Data
 		if result.Result.OutputRef != nil {
 			meta["output_ref"] = result.Result.OutputRef
 		}
+		if result.Result.Summary != "" {
+			meta["summary"] = result.Result.Summary
+		}
+		if result.Result.Structured != nil {
+			meta["structured"] = result.Result.Structured
+		}
+		if result.Result.Preview != nil {
+			meta["preview"] = result.Result.Preview
+		}
 		content = result.Result.Output
 		if len(result.Result.ContentBlocks) > 0 {
 			blocks = append([]model.ContentBlock(nil), result.Result.ContentBlocks...)
 			meta["content_blocks"] = blocks
+		}
+		if len(result.Result.Artifacts) > 0 {
+			artifacts = append([]artifact.ArtifactRef(nil), result.Result.Artifacts...)
+			meta["artifacts"] = artifacts
 		}
 	}
 	if err != nil {
@@ -1516,11 +1900,11 @@ func (t *runtimeToolExecutor) Execute(ctx context.Context, call agent.ToolCall, 
 
 	if hookErr := t.hooks.PostToolUse(ctx, coreToolResultPayload(call, result, err)); hookErr != nil && err == nil {
 		// Hook failed - still need to add tool_result to history
-		appendToolResult(content, blocks)
+		appendToolResult(content, blocks, artifacts)
 		return toolResult, hookErr
 	}
 
-	appendToolResult(content, blocks)
+	appendToolResult(content, blocks, artifacts)
 	return toolResult, err
 }
 

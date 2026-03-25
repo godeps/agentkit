@@ -3,6 +3,8 @@ package model
 import (
 	"context"
 	"strings"
+
+	"github.com/godeps/agentkit/pkg/artifact"
 )
 
 // ContentBlockType discriminates the kind of content in a ContentBlock.
@@ -34,6 +36,7 @@ type Message struct {
 	Role             string
 	Content          string
 	ContentBlocks    []ContentBlock // Multimodal content; takes precedence over Content when non-empty
+	Artifacts        []artifact.ArtifactRef
 	ToolCalls        []ToolCall
 	ReasoningContent string // For thinking models (e.g. DeepSeek, Kimi k2.5)
 }

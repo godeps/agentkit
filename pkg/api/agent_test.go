@@ -11,11 +11,14 @@ import (
 	"time"
 
 	"github.com/godeps/agentkit/pkg/agent"
+	"github.com/godeps/agentkit/pkg/artifact"
 	"github.com/godeps/agentkit/pkg/config"
 	coreevents "github.com/godeps/agentkit/pkg/core/events"
 	corehooks "github.com/godeps/agentkit/pkg/core/hooks"
 	"github.com/godeps/agentkit/pkg/message"
 	"github.com/godeps/agentkit/pkg/model"
+	"github.com/godeps/agentkit/pkg/pipeline"
+	"github.com/godeps/agentkit/pkg/runtime/checkpoint"
 	"github.com/godeps/agentkit/pkg/runtime/commands"
 	"github.com/godeps/agentkit/pkg/runtime/skills"
 	"github.com/godeps/agentkit/pkg/security"
@@ -823,6 +826,46 @@ func TestRuntimeToolExecutor_AppendsToolContentBlocksToHistory(t *testing.T) {
 	if msgs[1].ContentBlocks[0].MediaType != "image/png" || msgs[1].ContentBlocks[0].Data != "aGVsbG8=" {
 		t.Fatalf("unexpected content block payload: %+v", msgs[1].ContentBlocks[0])
 	}
+	if len(msgs[1].Artifacts) != 1 || msgs[1].Artifacts[0].ArtifactID != "art_image" {
+		t.Fatalf("expected artifact refs to be appended to history, got %+v", msgs[1].Artifacts)
+	}
+}
+
+func TestRuntimeToolExecutor_PreservesMultimodalToolResultMetadata(t *testing.T) {
+	reg := tool.NewRegistry()
+	impl := &multimodalTool{}
+	if err := reg.Register(impl); err != nil {
+		t.Fatalf("register tool: %v", err)
+	}
+	exec := tool.NewExecutor(reg, nil)
+	rtExec := &runtimeToolExecutor{
+		executor: exec,
+		hooks:    &runtimeHookAdapter{},
+		host:     "localhost",
+	}
+
+	call := agent.ToolCall{ID: "c1", Name: impl.Name(), Input: map[string]any{}}
+	res, err := rtExec.Execute(context.Background(), call, agent.NewContext())
+	if err != nil {
+		t.Fatalf("execute tool: %v", err)
+	}
+
+	if res.Output != "image loaded" {
+		t.Fatalf("unexpected output: %q", res.Output)
+	}
+	if got := res.Metadata["summary"]; got != "generated image preview" {
+		t.Fatalf("expected summary metadata, got %+v", got)
+	}
+	if got := res.Metadata["structured"]; got == nil {
+		t.Fatalf("expected structured metadata, got %+v", res.Metadata)
+	}
+	if got := res.Metadata["preview"]; got == nil {
+		t.Fatalf("expected preview metadata, got %+v", res.Metadata)
+	}
+	arts, ok := res.Metadata["artifacts"].([]artifact.ArtifactRef)
+	if !ok || len(arts) != 1 || arts[0].ArtifactID != "art_image" {
+		t.Fatalf("expected artifact metadata, got %+v", res.Metadata["artifacts"])
+	}
 }
 
 func TestNewRejectsDisallowedMCPServer(t *testing.T) {
@@ -906,6 +949,135 @@ func TestRuntimeCommandAndSkillIntegration(t *testing.T) {
 	}
 	if resp.Tags["skill"] != "true" || resp.Tags["severity"] != "info" {
 		t.Fatalf("tags missing: %+v", resp.Tags)
+	}
+}
+
+func TestCheckpointPipelineRunInterruptsAtCheckpoint(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{}
+	store := checkpoint.NewMemoryStore()
+	first := &pipelineStepTool{outputs: map[string]*tool.ToolResult{
+		"prepare": {Output: "prepared", Artifacts: []artifact.ArtifactRef{artifact.NewGeneratedRef("art_prepare", artifact.ArtifactKindText)}},
+		"review":  {Output: "reviewed", Artifacts: []artifact.ArtifactRef{artifact.NewGeneratedRef("art_review", artifact.ArtifactKindText)}},
+	}}
+	rt, err := New(context.Background(), Options{
+		ProjectRoot:     root,
+		Model:           mdl,
+		CustomTools:     []tool.Tool{first},
+		CheckpointStore: store,
+	})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	resp, err := rt.Run(context.Background(), Request{
+		Pipeline: &pipeline.Step{
+			Batch: &pipeline.Batch{
+				Steps: []pipeline.Step{
+					{Name: "prepare", Tool: first.Name()},
+					{Checkpoint: &pipeline.Checkpoint{Name: "after-review", Step: pipeline.Step{Name: "review", Tool: first.Name()}}},
+					{Name: "finalize", Tool: first.Name()},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run pipeline: %v", err)
+	}
+	if resp.Result == nil || !resp.Result.Interrupted || resp.Result.CheckpointID == "" {
+		t.Fatalf("expected interrupted result with checkpoint id, got %+v", resp.Result)
+	}
+	if resp.Result.Output != "reviewed" {
+		t.Fatalf("expected checkpoint step output to be surfaced, got %+v", resp.Result)
+	}
+	if fmt.Sprint(first.calls) != "[prepare review]" {
+		t.Fatalf("expected execution to stop after checkpoint, got %v", first.calls)
+	}
+}
+
+func TestResumePipelineRunContinuesRemainingStepsOnly(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{}
+	store := checkpoint.NewMemoryStore()
+	first := &pipelineStepTool{outputs: map[string]*tool.ToolResult{
+		"prepare":  {Output: "prepared", Artifacts: []artifact.ArtifactRef{artifact.NewGeneratedRef("art_prepare", artifact.ArtifactKindText)}},
+		"review":   {Output: "reviewed", Artifacts: []artifact.ArtifactRef{artifact.NewGeneratedRef("art_review", artifact.ArtifactKindText)}},
+		"finalize": {Output: "done", Artifacts: []artifact.ArtifactRef{artifact.NewGeneratedRef("art_done", artifact.ArtifactKindDocument)}},
+	}}
+	rt, err := New(context.Background(), Options{
+		ProjectRoot:     root,
+		Model:           mdl,
+		CustomTools:     []tool.Tool{first},
+		CheckpointStore: store,
+	})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	firstResp, err := rt.Run(context.Background(), Request{
+		SessionID: "pipeline-session",
+		Pipeline: &pipeline.Step{
+			Batch: &pipeline.Batch{
+				Steps: []pipeline.Step{
+					{Name: "prepare", Tool: first.Name()},
+					{Checkpoint: &pipeline.Checkpoint{Name: "after-review", Step: pipeline.Step{Name: "review", Tool: first.Name()}}},
+					{Name: "finalize", Tool: first.Name()},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run pipeline: %v", err)
+	}
+
+	resumed, err := rt.Run(context.Background(), Request{
+		SessionID:            "pipeline-session",
+		ResumeFromCheckpoint: firstResp.Result.CheckpointID,
+	})
+	if err != nil {
+		t.Fatalf("resume pipeline: %v", err)
+	}
+	if resumed.Result == nil || resumed.Result.Output != "done" || resumed.Result.Interrupted {
+		t.Fatalf("expected resumed completion, got %+v", resumed.Result)
+	}
+	if fmt.Sprint(first.calls) != "[prepare review finalize]" {
+		t.Fatalf("expected only remaining step after resume, got %v", first.calls)
+	}
+}
+
+func TestInterruptResultCarriesCheckpointIdentifier(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{}
+	store := checkpoint.NewMemoryStore()
+	first := &pipelineStepTool{outputs: map[string]*tool.ToolResult{
+		"human-review": {Output: "awaiting approval"},
+	}}
+	rt, err := New(context.Background(), Options{
+		ProjectRoot:     root,
+		Model:           mdl,
+		CustomTools:     []tool.Tool{first},
+		CheckpointStore: store,
+	})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	resp, err := rt.Run(context.Background(), Request{
+		Pipeline: &pipeline.Step{
+			Checkpoint: &pipeline.Checkpoint{
+				Name: "await-approval",
+				Step: pipeline.Step{Name: "human-review", Tool: first.Name()},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run pipeline: %v", err)
+	}
+	if resp.Result == nil || !resp.Result.Interrupted || resp.Result.StopReason != "interrupted" || resp.Result.CheckpointID == "" {
+		t.Fatalf("expected interrupt payload with checkpoint identifier, got %+v", resp.Result)
 	}
 }
 
@@ -1088,10 +1260,39 @@ func (m *multimodalTool) Execute(context.Context, map[string]interface{}) (*tool
 	return &tool.ToolResult{
 		Success: true,
 		Output:  "image loaded",
+		Summary: "generated image preview",
+		Structured: map[string]any{
+			"dominant_color": "blue",
+		},
+		Artifacts: []artifact.ArtifactRef{
+			artifact.NewGeneratedRef("art_image", artifact.ArtifactKindImage),
+		},
 		ContentBlocks: []model.ContentBlock{{
 			Type:      model.ContentBlockImage,
 			MediaType: "image/png",
 			Data:      "aGVsbG8=",
 		}},
+		Preview: &tool.Preview{
+			Title:     "Preview image",
+			Summary:   "generated image preview",
+			MediaType: "image/png",
+		},
 	}, nil
+}
+
+type pipelineStepTool struct {
+	calls   []string
+	outputs map[string]*tool.ToolResult
+}
+
+func (p *pipelineStepTool) Name() string             { return "pipeline_step" }
+func (p *pipelineStepTool) Description() string      { return "returns outputs based on pipeline step name" }
+func (p *pipelineStepTool) Schema() *tool.JSONSchema { return &tool.JSONSchema{Type: "object"} }
+func (p *pipelineStepTool) Execute(ctx context.Context, params map[string]interface{}) (*tool.ToolResult, error) {
+	name, _ := params["step"].(string)
+	p.calls = append(p.calls, name)
+	if res, ok := p.outputs[name]; ok {
+		return res, nil
+	}
+	return &tool.ToolResult{Output: name}, nil
 }
