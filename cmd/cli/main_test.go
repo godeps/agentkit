@@ -17,6 +17,7 @@ import (
 type fakeRuntime struct {
 	runFn       func(context.Context, api.Request) (*api.Response, error)
 	runStreamFn func(context.Context, api.Request) (<-chan api.StreamEvent, error)
+	resumeFn    func(context.Context, string) (*api.Response, error)
 	closeFn     func() error
 }
 
@@ -37,8 +38,8 @@ func (f *fakeRuntime) RunStream(ctx context.Context, req api.Request) (<-chan ap
 }
 
 func (f *fakeRuntime) Resume(ctx context.Context, checkpointID string) (*api.Response, error) {
-	if f.runFn != nil {
-		return f.runFn(ctx, api.Request{SessionID: checkpointID})
+	if f.resumeFn != nil {
+		return f.resumeFn(ctx, checkpointID)
 	}
 	return &api.Response{Result: &api.Result{Output: "resumed"}}, nil
 }
@@ -127,6 +128,96 @@ func TestRunPrintsSharedEffectiveConfig(t *testing.T) {
 	}
 	if got := stderr.String(); !strings.Contains(got, "effective-config (pre-runtime)") {
 		t.Fatalf("expected shared config output, got: %s", got)
+	}
+}
+
+func TestRunResumeDoesNotRequirePrompt(t *testing.T) {
+	origFactory := runtimeFactory
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+	})
+	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
+		return &fakeRuntime{
+			resumeFn: func(_ context.Context, checkpointID string) (*api.Response, error) {
+				if checkpointID != "cp-1" {
+					t.Fatalf("unexpected checkpoint id: %q", checkpointID)
+				}
+				return &api.Response{
+					Mode: api.ModeContext{EntryPoint: api.EntryPointCLI},
+					Result: &api.Result{
+						Output:       "resumed ok",
+						CheckpointID: "cp-2",
+					},
+				}, nil
+			},
+		}, nil
+	}
+
+	var stdout bytes.Buffer
+	if err := run([]string{"--resume", "cp-1"}, &stdout, io.Discard); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := stdout.String()
+	for _, sub := range []string{"resumed ok", "checkpoint_id: cp-2"} {
+		if !strings.Contains(got, sub) {
+			t.Fatalf("missing %q in output: %s", sub, got)
+		}
+	}
+}
+
+func TestRunPrintTimelineForResume(t *testing.T) {
+	origFactory := runtimeFactory
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+	})
+	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
+		return &fakeRuntime{
+			resumeFn: func(_ context.Context, checkpointID string) (*api.Response, error) {
+				return &api.Response{
+					Mode:   api.ModeContext{EntryPoint: api.EntryPointCLI},
+					Result: &api.Result{Output: checkpointID},
+					Timeline: []api.TimelineEntry{
+						{Kind: api.TimelineKindResume, Source: api.TimelineEventResume},
+					},
+				}, nil
+			},
+		}, nil
+	}
+
+	var stdout bytes.Buffer
+	if err := run([]string{"--resume", "cp-1", "--print-timeline"}, &stdout, io.Discard); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, "timeline:") || !strings.Contains(got, "resume") {
+		t.Fatalf("expected timeline output, got: %s", got)
+	}
+}
+
+func TestRunPrintTimelineForNormalRun(t *testing.T) {
+	origFactory := runtimeFactory
+	t.Cleanup(func() {
+		runtimeFactory = origFactory
+	})
+	runtimeFactory = func(context.Context, api.Options) (runtimeClient, error) {
+		return &fakeRuntime{
+			runFn: func(context.Context, api.Request) (*api.Response, error) {
+				return &api.Response{
+					Mode:   api.ModeContext{EntryPoint: api.EntryPointCLI},
+					Result: &api.Result{Output: "ok"},
+					Timeline: []api.TimelineEntry{
+						{Kind: api.TimelineKindToolResult, Source: api.EventToolExecutionResult},
+					},
+				}, nil
+			},
+		}, nil
+	}
+
+	var stdout bytes.Buffer
+	if err := run([]string{"--prompt", "hi", "--print-timeline"}, &stdout, io.Discard); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, "timeline:") || !strings.Contains(got, "tool_result") {
+		t.Fatalf("expected timeline output, got: %s", got)
 	}
 }
 

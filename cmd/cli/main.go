@@ -65,8 +65,10 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	sessionID := flags.String("session", "", "Session identifier override")
 	timeoutMs := flags.Int("timeout-ms", 10*60*1000, "Run timeout in milliseconds")
 	printConfig := flags.Bool("print-effective-config", false, "Print resolved runtime config before running")
+	printTimeline := flags.Bool("print-timeline", false, "Print unified runtime timeline after completion")
 	promptFile := flags.String("prompt-file", "", "Read prompt from file (defaults to stdin/args)")
 	promptLiteral := flags.String("prompt", "", "Prompt literal (overrides stdin)")
+	resumeCheckpoint := flags.String("resume", "", "Resume a previously interrupted run by checkpoint ID")
 	stream := flags.Bool("stream", false, "Stream events instead of waiting for completion")
 	streamFormat := flags.String("stream-format", "json", "Streaming output format: json|rendered")
 	repl := flags.Bool("repl", false, "Run interactive REPL mode")
@@ -180,17 +182,10 @@ func run(argv []string, stdout, stderr io.Writer) error {
 		clikit.PrintRuntimeEffectiveConfig(stderr, adapter, *timeoutMs)
 	}
 
-	if *repl || shouldAutoEnterInteractive(*promptLiteral, *promptFile, flags.Args(), *stream, *acpMode) {
+	resumeID := strings.TrimSpace(*resumeCheckpoint)
+	if *repl || shouldAutoEnterInteractive(*promptLiteral, *promptFile, flags.Args(), *stream, *acpMode, resumeID) {
 		clikit.PrintBanner(stdout, adapter.ModelName(), adapter.Skills())
 		return clikitRunInteractiveShell(context.Background(), os.Stdin, stdout, stderr, adapter, *timeoutMs, *verbose, *waterfall, resolvedSessionID)
-	}
-
-	prompt, err := resolvePrompt(*promptLiteral, *promptFile, flags.Args())
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(prompt) == "" {
-		return errors.New("prompt is empty")
 	}
 
 	ctx := context.Background()
@@ -203,7 +198,6 @@ func run(argv []string, stdout, stderr io.Writer) error {
 	defer cancel()
 
 	req := api.Request{
-		Prompt:    prompt,
 		SessionID: resolvedSessionID,
 		Mode: api.ModeContext{
 			EntryPoint: options.EntryPoint,
@@ -215,6 +209,16 @@ func run(argv []string, stdout, stderr io.Writer) error {
 		},
 		Tags: parseTags(tagFlags),
 	}
+	if resumeID == "" {
+		prompt, err := resolvePrompt(*promptLiteral, *promptFile, flags.Args())
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(prompt) == "" {
+			return errors.New("prompt is empty")
+		}
+		req.Prompt = prompt
+	}
 	if *stream {
 		switch strings.ToLower(strings.TrimSpace(*streamFormat)) {
 		case "", "json":
@@ -225,11 +229,19 @@ func run(argv []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("unsupported stream format %q", *streamFormat)
 		}
 	}
-	resp, err := runtime.Run(ctx, req)
-	if err != nil {
-		return err
+	var resp *api.Response
+	if resumeID != "" {
+		resp, err = runtime.Resume(ctx, resumeID)
+		if err != nil {
+			return err
+		}
+	} else {
+		resp, err = runtime.Run(ctx, req)
+		if err != nil {
+			return err
+		}
 	}
-	printResponse(resp, stdout)
+	printResponse(resp, stdout, *printTimeline)
 	return nil
 }
 
@@ -361,8 +373,11 @@ func resolvePrompt(literal, file string, tail []string) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-func shouldAutoEnterInteractive(literal, file string, tail []string, stream, acp bool) bool {
+func shouldAutoEnterInteractive(literal, file string, tail []string, stream, acp bool, resumeID string) bool {
 	if acp || stream {
+		return false
+	}
+	if strings.TrimSpace(resumeID) != "" {
 		return false
 	}
 	if strings.TrimSpace(literal) != "" || strings.TrimSpace(file) != "" || len(tail) > 0 {
@@ -375,14 +390,41 @@ func shouldAutoEnterInteractive(literal, file string, tail []string, stream, acp
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-func printResponse(resp *api.Response, out io.Writer) {
+func printResponse(resp *api.Response, out io.Writer, printTimeline bool) {
 	if resp == nil || out == nil {
 		return
 	}
 	fmt.Fprintf(out, "# agentsdk run (%s)\n", resp.Mode.EntryPoint)
 	if resp.Result != nil {
 		fmt.Fprintf(out, "stop_reason: %s\n", resp.Result.StopReason)
+		if resp.Result.Interrupted {
+			fmt.Fprintln(out, "interrupted: true")
+		}
+		if checkpointID := strings.TrimSpace(resp.Result.CheckpointID); checkpointID != "" {
+			fmt.Fprintf(out, "checkpoint_id: %s\n", checkpointID)
+		}
 		fmt.Fprintf(out, "output:\n%s\n", resp.Result.Output)
+	}
+	if printTimeline {
+		printTimelineEntries(out, resp.Timeline)
+	}
+}
+
+func printTimelineEntries(out io.Writer, timeline []api.TimelineEntry) {
+	if out == nil {
+		return
+	}
+	fmt.Fprintln(out, "timeline:")
+	if len(timeline) == 0 {
+		fmt.Fprintln(out, "- none")
+		return
+	}
+	for _, entry := range timeline {
+		if strings.TrimSpace(entry.Source) != "" {
+			fmt.Fprintf(out, "- %s source=%s\n", entry.Kind, entry.Source)
+			continue
+		}
+		fmt.Fprintf(out, "- %s\n", entry.Kind)
 	}
 }
 
